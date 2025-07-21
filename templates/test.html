@@ -1,0 +1,2266 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>首信云 - 数据底座</title>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Microsoft YaHei', 'PingFang SC', sans-serif;
+            background: linear-gradient(135deg, #1e3c72 0%, #2a5298 100%);
+            min-height: 100vh;
+            color: #333;
+            overflow-x: hidden;
+        }
+
+        .container {
+            display: flex;
+            min-height: 100vh;
+        }
+
+        /* 侧边栏样式 */
+        .sidebar {
+            width: 280px;
+            background: rgba(255, 255, 255, 0.95);
+            backdrop-filter: blur(15px);
+            border-right: 1px solid rgba(255, 255, 255, 0.2);
+            padding: 20px 0;
+            box-shadow: 2px 0 25px rgba(0, 0, 0, 0.1);
+            overflow-y: auto;
+            transition: all 0.3s ease;
+            z-index: 100;
+        }
+
+        .logo {
+            text-align: center;
+            padding: 0 20px 30px;
+            border-bottom: 2px solid #eee;
+            margin-bottom: 25px;
+        }
+
+        .logo h1 {
+            font-size: 20px;
+            background: linear-gradient(45deg, #1e3c72, #2a5298);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            font-weight: bold;
+            margin-bottom: 5px;
+        }
+
+        .logo p {
+            font-size: 11px;
+            color: #666;
+            margin-bottom: 3px;
+        }
+
+        .logo .version {
+            font-size: 10px;
+            color: #999;
+            background: #f0f0f0;
+            padding: 2px 8px;
+            border-radius: 10px;
+            display: inline-block;
+        }
+
+        .nav-menu {
+            list-style: none;
+        }
+
+        .nav-category {
+            color: #999;
+            font-size: 12px;
+            font-weight: bold;
+            padding: 15px 20px 10px;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+        }
+
+        .nav-item {
+            margin-bottom: 2px;
+        }
+
+        .nav-link {
+            display: flex;
+            align-items: center;
+            padding: 12px 20px;
+            text-decoration: none;
+            color: #666;
+            transition: all 0.3s ease;
+            border-left: 3px solid transparent;
+            font-size: 14px;
+            cursor: pointer;
+        }
+
+        .nav-link:hover, .nav-link.active {
+            background: rgba(30, 60, 114, 0.1);
+            color: #1e3c72;
+            border-left-color: #1e3c72;
+        }
+
+        .nav-icon {
+            margin-right: 12px;
+            font-size: 16px;
+            width: 20px;
+            text-align: center;
+        }
+
+        .nav-badge {
+            background: #ff4757;
+            color: white;
+            font-size: 10px;
+            padding: 2px 6px;
+            border-radius: 10px;
+            margin-left: auto;
+        }
+
+        /* 主内容区域 */
+        .main-content {
+            flex: 1;
+            padding: 20px;
+            overflow-y: auto;
+        }
+
+        .header {
+            background: rgba(255, 255, 255, 0.95);
+            backdrop-filter: blur(15px);
+            padding: 20px 30px;
+            border-radius: 15px;
+            margin-bottom: 25px;
+            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.1);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .header-left {
+            display: flex;
+            align-items: center;
+            gap: 20px;
+        }
+
+        .header-title {
+            font-size: 24px;
+            font-weight: bold;
+            color: #333;
+        }
+
+        .breadcrumb {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            color: #666;
+            font-size: 14px;
+        }
+
+        .header-right {
+            display: flex;
+            align-items: center;
+            gap: 15px;
+        }
+
+        .cluster-status {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            padding: 8px 15px;
+            background: rgba(40, 167, 69, 0.1);
+            border-radius: 20px;
+            color: #28a745;
+            font-size: 12px;
+            font-weight: bold;
+        }
+
+        .status-dot {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background: #28a745;
+            animation: pulse 2s infinite;
+        }
+
+        @keyframes pulse {
+            0% { opacity: 1; }
+            50% { opacity: 0.5; }
+            100% { opacity: 1; }
+        }
+
+        .btn {
+            padding: 10px 20px;
+            border: none;
+            border-radius: 25px;
+            cursor: pointer;
+            font-size: 14px;
+            transition: all 0.3s ease;
+            text-decoration: none;
+            display: inline-flex;
+            align-items: center;
+            gap: 5px;
+        }
+
+        .btn-primary {
+            background: linear-gradient(45deg, #1e3c72, #2a5298);
+            color: white;
+        }
+
+        .btn-primary:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 5px 15px rgba(30, 60, 114, 0.4);
+        }
+
+        .btn-secondary {
+            background: rgba(255, 255, 255, 0.8);
+            color: #1e3c72;
+            border: 1px solid #1e3c72;
+        }
+
+        .btn-secondary:hover {
+            background: #1e3c72;
+            color: white;
+        }
+
+        /* 页面内容容器 */
+        .page-content {
+            display: none;
+            animation: fadeIn 0.5s ease;
+        }
+
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(10px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+
+        .page-content.active {
+            display: block;
+        }
+
+        /* 统计卡片网格 */
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+            gap: 20px;
+            margin-bottom: 25px;
+        }
+
+        .stat-card {
+            background: rgba(255, 255, 255, 0.95);
+            backdrop-filter: blur(15px);
+            border-radius: 15px;
+            padding: 20px;
+            box-shadow: 0 8px 25px rgba(0, 0, 0, 0.1);
+            transition: all 0.3s ease;
+            border: 1px solid rgba(255, 255, 255, 0.2);
+        }
+
+        .stat-card:hover {
+            transform: translateY(-3px);
+            box-shadow: 0 15px 35px rgba(0, 0, 0, 0.15);
+        }
+
+        .stat-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 15px;
+        }
+
+        .stat-title {
+            font-size: 14px;
+            color: #666;
+            font-weight: 500;
+        }
+
+        .stat-icon {
+            font-size: 20px;
+            padding: 8px;
+            border-radius: 10px;
+            background: rgba(30, 60, 114, 0.1);
+            color: #1e3c72;
+        }
+
+        .stat-value {
+            font-size: 28px;
+            font-weight: bold;
+            color: #1e3c72;
+            margin-bottom: 8px;
+        }
+
+        .stat-change {
+            font-size: 12px;
+            display: flex;
+            align-items: center;
+            gap: 5px;
+        }
+
+        .stat-change.positive {
+            color: #28a745;
+        }
+
+        .stat-change.negative {
+            color: #dc3545;
+        }
+
+        .stat-change.warning {
+            color: #ffc107;
+        }
+
+        /* 功能区域 */
+        .feature-section {
+            background: rgba(255, 255, 255, 0.95);
+            backdrop-filter: blur(15px);
+            border-radius: 15px;
+            padding: 25px;
+            margin-bottom: 25px;
+            box-shadow: 0 8px 25px rgba(0, 0, 0, 0.1);
+        }
+
+        .section-title {
+            font-size: 18px;
+            font-weight: bold;
+            margin-bottom: 20px;
+            color: #333;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        /* 集群监控 */
+        .cluster-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 15px;
+            margin-bottom: 20px;
+        }
+
+        .cluster-item {
+            background: rgba(248, 249, 250, 0.8);
+            border-radius: 10px;
+            padding: 15px;
+            text-align: center;
+            transition: all 0.3s ease;
+            border: 1px solid rgba(0, 0, 0, 0.1);
+        }
+
+        .cluster-item:hover {
+            background: rgba(30, 60, 114, 0.1);
+            transform: translateY(-2px);
+        }
+
+        .cluster-name {
+            font-size: 14px;
+            font-weight: bold;
+            margin-bottom: 8px;
+            color: #333;
+        }
+
+        .cluster-status-text {
+            font-size: 12px;
+            color: #666;
+            margin-bottom: 5px;
+        }
+
+        .cluster-metrics {
+            display: flex;
+            justify-content: space-between;
+            font-size: 11px;
+            color: #999;
+        }
+
+        /* 数据表格 */
+        .data-table {
+            background: rgba(255, 255, 255, 0.95);
+            backdrop-filter: blur(15px);
+            border-radius: 15px;
+            padding: 25px;
+            box-shadow: 0 8px 25px rgba(0, 0, 0, 0.1);
+            margin-bottom: 20px;
+            overflow-x: auto;
+        }
+
+        .table-controls {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 20px;
+            flex-wrap: wrap;
+            gap: 15px;
+        }
+
+        .search-filters {
+            display: flex;
+            gap: 10px;
+            align-items: center;
+        }
+
+        .search-input {
+            padding: 10px 15px;
+            border: 1px solid #ddd;
+            border-radius: 20px;
+            outline: none;
+            font-size: 14px;
+            width: 200px;
+        }
+
+        .search-input:focus {
+            border-color: #1e3c72;
+            box-shadow: 0 0 0 3px rgba(30, 60, 114, 0.1);
+        }
+
+        .filter-select {
+            padding: 10px 15px;
+            border: 1px solid #ddd;
+            border-radius: 20px;
+            outline: none;
+            font-size: 14px;
+            background: white;
+        }
+
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-top: 15px;
+            min-width: 1000px;
+        }
+
+        th, td {
+            padding: 12px;
+            text-align: left;
+            border-bottom: 1px solid #eee;
+        }
+
+        th {
+            background: rgba(30, 60, 114, 0.1);
+            color: #1e3c72;
+            font-weight: bold;
+            font-size: 14px;
+        }
+
+        tr:hover {
+            background: rgba(30, 60, 114, 0.05);
+        }
+
+        .status-badge {
+            padding: 4px 10px;
+            border-radius: 12px;
+            font-size: 11px;
+            font-weight: bold;
+        }
+
+        .status-running {
+            background: #fff3cd;
+            color: #856404;
+        }
+
+        .status-success {
+            background: #d4edda;
+            color: #155724;
+        }
+
+        .status-failed {
+            background: #f8d7da;
+            color: #721c24;
+        }
+
+        .status-pending {
+            background: #e2e3e5;
+            color: #6c757d;
+        }
+
+        .priority-high {
+            background: #f8d7da;
+            color: #721c24;
+        }
+
+        .priority-medium {
+            background: #fff3cd;
+            color: #856404;
+        }
+
+        .priority-low {
+            background: #d4edda;
+            color: #155724;
+        }
+
+        /* 操作按钮 */
+        .action-buttons {
+            display: flex;
+            gap: 5px;
+        }
+
+        .action-btn {
+            padding: 5px 10px;
+            font-size: 12px;
+            border-radius: 15px;
+            text-decoration: none;
+            transition: all 0.3s ease;
+            cursor: pointer;
+            border: none;
+            background: #e9ecef;
+            color: #495057;
+        }
+
+        .action-btn:hover {
+            transform: translateY(-1px);
+            background: #dee2e6;
+        }
+
+        /* 图表容器 */
+        .chart-container {
+            height: 300px;
+            margin-top: 20px;
+            background: white;
+            border-radius: 10px;
+            padding: 15px;
+        }
+
+        /* 响应式设计 */
+        @media (max-width: 1024px) {
+            .sidebar {
+                width: 250px;
+            }
+
+            .stats-grid {
+                grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+            }
+        }
+
+        @media (max-width: 768px) {
+            .container {
+                flex-direction: column;
+            }
+
+            .sidebar {
+                width: 100%;
+                height: auto;
+                max-height: 300px;
+            }
+
+            .stats-grid {
+                grid-template-columns: 1fr;
+            }
+
+            .header {
+                flex-direction: column;
+                gap: 15px;
+                text-align: center;
+            }
+
+            .table-controls {
+                flex-direction: column;
+                align-items: stretch;
+            }
+        }
+
+        /* 其他页面的内容样式 */
+        .page-content .page-title {
+            font-size: 28px;
+            margin-bottom: 20px;
+            color: #1e3c72;
+            text-align: center;
+        }
+
+        .page-content .page-description {
+            color: #666;
+            text-align: center;
+            max-width: 800px;
+            margin: 0 auto 30px;
+            line-height: 1.6;
+        }
+
+        .features-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+            gap: 20px;
+            margin-top: 30px;
+        }
+
+        .feature-card {
+            background: white;
+            border-radius: 15px;
+            padding: 25px;
+            box-shadow: 0 5px 15px rgba(0,0,0,0.05);
+            transition: all 0.3s ease;
+        }
+
+        .feature-card:hover {
+            transform: translateY(-5px);
+            box-shadow: 0 10px 25px rgba(0,0,0,0.1);
+        }
+
+        .feature-card h3 {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            color: #1e3c72;
+            margin-bottom: 15px;
+        }
+
+        .feature-card p {
+            color: #666;
+            line-height: 1.6;
+        }
+
+        .toggle-sidebar {
+            display: none;
+            position: fixed;
+            top: 20px;
+            left: 20px;
+            z-index: 101;
+            background: #1e3c72;
+            color: white;
+            border: none;
+            border-radius: 50%;
+            width: 40px;
+            height: 40px;
+            font-size: 20px;
+            cursor: pointer;
+            box-shadow: 0 4px 10px rgba(0,0,0,0.2);
+        }
+
+        @media (max-width: 768px) {
+            .toggle-sidebar {
+                display: block;
+            }
+
+            .sidebar {
+                position: fixed;
+                height: 100%;
+                transform: translateX(-100%);
+            }
+
+            .sidebar.active {
+                transform: translateX(0);
+            }
+        }
+
+        /* 加载动画 */
+        .loading {
+            display: inline-block;
+            width: 20px;
+            height: 20px;
+            border: 3px solid rgba(30, 60, 114, 0.1);
+            border-radius: 50%;
+            border-top-color: #1e3c72;
+            animation: spin 1s ease-in-out infinite;
+        }
+
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+
+        .alert {
+            padding: 12px 20px;
+            border-radius: 8px;
+            margin-bottom: 20px;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .alert-success {
+            background: #d4edda;
+            color: #155724;
+            border: 1px solid #c3e6cb;
+        }
+
+        .alert-error {
+            background: #f8d7da;
+            color: #721c24;
+            border: 1px solid #f5c6cb;
+        }
+
+        .alert-warning {
+            background: #fff3cd;
+            color: #856404;
+            border: 1px solid #ffeeba;
+        }
+
+        /* 节点详情样式 */
+        .node-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+            gap: 15px;
+            margin-top: 20px;
+        }
+
+        .node-card {
+            background: rgba(248, 249, 250, 0.9);
+            border-radius: 10px;
+            padding: 15px;
+            border: 1px solid rgba(0, 0, 0, 0.1);
+        }
+
+        .node-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 10px;
+        }
+
+        .node-name {
+            font-weight: bold;
+            color: #333;
+        }
+
+        .node-role {
+            font-size: 12px;
+            color: #666;
+            background: #e9ecef;
+            padding: 2px 8px;
+            border-radius: 10px;
+        }
+
+        .node-metrics {
+            display: grid;
+            grid-template-columns: repeat(2, 1fr);
+            gap: 10px;
+            margin-top: 10px;
+        }
+
+        .metric-item {
+            display: flex;
+            justify-content: space-between;
+            font-size: 12px;
+        }
+
+        .metric-label {
+            color: #666;
+        }
+
+        .metric-value {
+            font-weight: bold;
+            color: #333;
+        }
+
+        /* 进度条 */
+        .progress-bar {
+            width: 100%;
+            height: 6px;
+            background: #e9ecef;
+            border-radius: 3px;
+            overflow: hidden;
+            margin-top: 5px;
+        }
+
+        .progress-fill {
+            height: 100%;
+            background: linear-gradient(45deg, #1e3c72, #2a5298);
+            transition: width 0.3s ease;
+        }
+
+        /* 数据质量维度 */
+        .quality-dimensions {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+            gap: 15px;
+            margin-top: 20px;
+        }
+
+        .dimension-card {
+            background: white;
+            border-radius: 10px;
+            padding: 15px;
+            text-align: center;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.05);
+        }
+
+        .dimension-score {
+            font-size: 32px;
+            font-weight: bold;
+            color: #1e3c72;
+        }
+
+        .dimension-name {
+            font-size: 12px;
+            color: #666;
+            margin-top: 5px;
+        }
+
+        /* 规则卡片 */
+        .rule-card {
+            background: white;
+            border-radius: 10px;
+            padding: 20px;
+            margin-bottom: 15px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.05);
+            border-left: 4px solid #1e3c72;
+        }
+
+        .rule-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 10px;
+        }
+
+        .rule-name {
+            font-weight: bold;
+            color: #333;
+        }
+
+        .rule-type {
+            font-size: 12px;
+            color: #666;
+            background: #e9ecef;
+            padding: 2px 8px;
+            border-radius: 10px;
+        }
+
+        .rule-details {
+            color: #666;
+            font-size: 14px;
+            line-height: 1.5;
+        }
+
+        .rule-stats {
+            display: flex;
+            gap: 20px;
+            margin-top: 10px;
+            font-size: 12px;
+        }
+
+        .rule-stat {
+            display: flex;
+            align-items: center;
+            gap: 5px;
+        }
+
+        /* 工作流卡片 */
+        .workflow-card {
+            background: white;
+            border-radius: 10px;
+            padding: 20px;
+            margin-bottom: 15px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.05);
+            transition: all 0.3s ease;
+        }
+
+        .workflow-card:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 5px 20px rgba(0,0,0,0.1);
+        }
+
+        .workflow-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 15px;
+        }
+
+        .workflow-name {
+            font-size: 16px;
+            font-weight: bold;
+            color: #333;
+        }
+
+        .workflow-type {
+            font-size: 12px;
+            color: #666;
+            background: rgba(30, 60, 114, 0.1);
+            padding: 4px 10px;
+            border-radius: 15px;
+        }
+
+        .workflow-info {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 10px;
+            font-size: 12px;
+            color: #666;
+        }
+
+        .workflow-stat {
+            display: flex;
+            flex-direction: column;
+        }
+
+        .workflow-stat-label {
+            color: #999;
+            margin-bottom: 2px;
+        }
+
+        .workflow-stat-value {
+            font-weight: bold;
+            color: #333;
+        }
+
+        /* 数据源卡片 */
+        .source-card {
+            background: white;
+            border-radius: 10px;
+            padding: 20px;
+            margin-bottom: 15px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.05);
+            position: relative;
+            overflow: hidden;
+        }
+
+        .source-status-indicator {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 4px;
+            height: 100%;
+            background: #28a745;
+        }
+
+        .source-status-indicator.disconnected {
+            background: #dc3545;
+        }
+
+        .source-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 15px;
+        }
+
+        .source-name {
+            font-size: 16px;
+            font-weight: bold;
+            color: #333;
+        }
+
+        .source-type {
+            display: flex;
+            align-items: center;
+            gap: 5px;
+            font-size: 12px;
+            color: #666;
+            background: #e9ecef;
+            padding: 4px 10px;
+            border-radius: 15px;
+        }
+
+        .source-details {
+            display: grid;
+            grid-template-columns: repeat(2, 1fr);
+            gap: 10px;
+            font-size: 12px;
+            color: #666;
+        }
+
+        .source-detail-item {
+            display: flex;
+            align-items: center;
+            gap: 5px;
+        }
+
+        /* 同步任务卡片 */
+        .sync-card {
+            background: white;
+            border-radius: 10px;
+            padding: 20px;
+            margin-bottom: 15px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.05);
+        }
+
+        .sync-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 15px;
+        }
+
+        .sync-name {
+            font-size: 16px;
+            font-weight: bold;
+            color: #333;
+        }
+
+        .sync-progress {
+            margin: 15px 0;
+        }
+
+        .sync-progress-text {
+            display: flex;
+            justify-content: space-between;
+            font-size: 12px;
+            color: #666;
+            margin-bottom: 5px;
+        }
+
+        .sync-details {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 10px;
+            font-size: 12px;
+            color: #666;
+            margin-top: 15px;
+        }
+    </style>
+</head>
+<body>
+<button class="toggle-sidebar">
+    <i class="fas fa-bars"></i>
+</button>
+
+<div class="container">
+    <!-- 侧边栏 -->
+    <div class="sidebar">
+        <div class="logo">
+            <h1>首信云</h1>
+            <p>数据底座</p>
+            <span class="version">v3.2.1</span>
+        </div>
+
+        <ul class="nav-menu">
+            <li class="nav-category">数据概览</li>
+            <li class="nav-item">
+                <div class="nav-link active" data-page="overview">
+                    <span class="nav-icon">📊</span>
+                    <span class="nav-text">数据总览</span>
+                </div>
+            </li>
+            <li class="nav-item">
+                <div class="nav-link" data-page="cluster">
+                    <span class="nav-icon">🖥️</span>
+                    <span class="nav-text">集群监控</span>
+                    <span class="nav-badge" id="cluster-alerts">0</span>
+                </div>
+            </li>
+
+            <li class="nav-category">数据管理</li>
+            <li class="nav-item">
+                <div class="nav-link" data-page="ingestion">
+                    <span class="nav-icon">🔌</span>
+                    <span class="nav-text">数据接入</span>
+                </div>
+            </li>
+            <li class="nav-item">
+                <div class="nav-link" data-page="development">
+                    <span class="nav-icon">⚙️</span>
+                    <span class="nav-text">数据开发</span>
+                </div>
+            </li>
+            <li class="nav-item">
+                <div class="nav-link" data-page="sync">
+                    <span class="nav-icon">🔄</span>
+                    <span class="nav-text">数据同步</span>
+                </div>
+            </li>
+            <li class="nav-item">
+                <div class="nav-link" data-page="governance">
+                    <span class="nav-icon">🎯</span>
+                    <span class="nav-text">数据治理</span>
+                </div>
+            </li>
+
+            <li class="nav-category">服务管理</li>
+            <li class="nav-item">
+                <div class="nav-link" data-page="service">
+                    <span class="nav-icon">🚀</span>
+                    <span class="nav-text">数据服务</span>
+                </div>
+            </li>
+            <li class="nav-item">
+                <div class="nav-link" data-page="assets">
+                    <span class="nav-icon">📈</span>
+                    <span class="nav-text">数据资产</span>
+                </div>
+            </li>
+            <li class="nav-item">
+                <div class="nav-link" data-page="exploration">
+                    <span class="nav-icon">🔍</span>
+                    <span class="nav-text">数据探索</span>
+                </div>
+            </li>
+
+            <li class="nav-category">运维调度</li>
+            <li class="nav-item">
+                <div class="nav-link" data-page="schedule">
+                    <span class="nav-icon">📋</span>
+                    <span class="nav-text">任务调度</span>
+                </div>
+            </li>
+            <li class="nav-item">
+                <div class="nav-link" data-page="monitor">
+                    <span class="nav-icon">📊</span>
+                    <span class="nav-text">作业监控</span>
+                </div>
+            </li>
+            <li class="nav-item">
+                <div class="nav-link" data-page="alert">
+                    <span class="nav-icon">🔔</span>
+                    <span class="nav-text">告警中心</span>
+                    <span class="nav-badge" id="alert-count">0</span>
+                </div>
+            </li>
+
+            <li class="nav-category">系统管理</li>
+            <li class="nav-item">
+                <div class="nav-link" data-page="users">
+                    <span class="nav-icon">👥</span>
+                    <span class="nav-text">用户管理</span>
+                </div>
+            </li>
+            <li class="nav-item">
+                <div class="nav-link" data-page="permissions">
+                    <span class="nav-icon">🔒</span>
+                    <span class="nav-text">权限管理</span>
+                </div>
+            </li>
+            <li class="nav-item">
+                <div class="nav-link" data-page="logs">
+                    <span class="nav-icon">📝</span>
+                    <span class="nav-text">审计日志</span>
+                </div>
+            </li>
+            <li class="nav-item">
+                <div class="nav-link" data-page="config">
+                    <span class="nav-icon">⚙️</span>
+                    <span class="nav-text">系统配置</span>
+                </div>
+            </li>
+        </ul>
+    </div>
+
+    <!-- 主内容区 -->
+    <div class="main-content">
+        <!-- 头部 -->
+        <div class="header">
+            <div class="header-left">
+                <div>
+                    <h2 class="header-title">数据总览</h2>
+                    <div class="breadcrumb">
+                        <span>首页</span>
+                        <span>></span>
+                        <span class="current-page">数据总览</span>
+                    </div>
+                </div>
+            </div>
+            <div class="header-right">
+                <div class="cluster-status" id="system-status">
+                    <div class="status-dot"></div>
+                    <span>系统正常运行</span>
+                </div>
+                <button class="btn btn-secondary">📊 生成报表</button>
+                <button class="btn btn-primary" id="refresh-btn">🔄 刷新数据</button>
+            </div>
+        </div>
+
+        <!-- 数据总览页面 -->
+        <div class="page-content active" id="overview">
+            <!-- 统计卡片 -->
+            <div class="stats-grid" id="overview-stats">
+                <div class="loading">加载中...</div>
+            </div>
+
+            <!-- 集群运行状态 -->
+            <div class="feature-section">
+                <h3 class="section-title">
+                    <span>🖥️</span>
+                    <span>集群运行状态</span>
+                </h3>
+                <div class="cluster-grid" id="overview-clusters">
+                    <div class="loading">加载中...</div>
+                </div>
+            </div>
+
+            <!-- 今日任务执行情况 -->
+            <div class="data-table">
+                <div class="table-controls">
+                    <h3>今日任务执行情况</h3>
+                    <div class="search-filters">
+                        <input type="text" class="search-input" id="task-search" placeholder="搜索任务名称或业务系统...">
+                        <select class="filter-select" id="task-filter">
+                            <option value="">全部状态</option>
+                            <option value="running">运行中</option>
+                            <option value="success">成功</option>
+                            <option value="failed">失败</option>
+                            <option value="pending">等待中</option>
+                        </select>
+                        <button class="btn btn-primary" onclick="filterTasks()">🔍 搜索</button>
+                    </div>
+                </div>
+
+                <table>
+                    <thead>
+                    <tr>
+                        <th>任务名称</th>
+                        <th>业务系统</th>
+                        <th>数据源</th>
+                        <th>目标表</th>
+                        <th>执行时间</th>
+                        <th>状态</th>
+                        <th>优先级</th>
+                        <th>数据量</th>
+                        <th>耗时</th>
+                        <th>操作</th>
+                    </tr>
+                    </thead>
+                    <tbody id="tasks-table">
+                        <tr><td colspan="10" style="text-align: center;">加载中...</td></tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+
+        <!-- 集群监控页面 -->
+        <div class="page-content" id="cluster">
+            <h2 class="page-title">集群监控中心</h2>
+            <p class="page-description">实时监控集群资源使用情况，包括CPU、内存、磁盘、网络等关键指标，确保系统稳定运行</p>
+
+            <div class="feature-section">
+                <h3 class="section-title">
+                    <span>📊</span>
+                    <span>集群资源概览</span>
+                </h3>
+                <div class="stats-grid" id="cluster-stats">
+                    <div class="loading">加载中...</div>
+                </div>
+
+                <div class="chart-container">
+                    <h3>集群资源趋势图</h3>
+                    <canvas id="clusterChart"></canvas>
+                </div>
+            </div>
+
+            <div class="feature-section">
+                <h3 class="section-title">
+                    <span>📈</span>
+                    <span>节点详细状态</span>
+                </h3>
+                <div id="cluster-nodes-detail">
+                    <div class="loading">加载中...</div>
+                </div>
+            </div>
+        </div>
+
+        <!-- 数据接入页面 -->
+        <div class="page-content" id="ingestion">
+            <h2 class="page-title">数据接入管理</h2>
+            <p class="page-description">配置和管理数据源接入，支持多种数据源类型，实现数据的实时采集和批量导入</p>
+
+            <div class="feature-section">
+                <h3 class="section-title">
+                    <span>📊</span>
+                    <span>接入概览</span>
+                </h3>
+                <div id="ingestion-overview">
+                    <div class="loading">加载中...</div>
+                </div>
+            </div>
+
+            <div class="feature-section">
+                <h3 class="section-title">
+                    <span>🔌</span>
+                    <span>数据源列表</span>
+                </h3>
+                <div id="data-sources">
+                    <div class="loading">加载中...</div>
+                </div>
+            </div>
+        </div>
+
+        <!-- 数据开发页面 -->
+        <div class="page-content" id="development">
+            <h2 class="page-title">数据开发平台</h2>
+            <p class="page-description">提供强大的数据开发工具，支持SQL、Python、Scala等多种开发语言，实现数据处理逻辑的可视化开发</p>
+
+            <div class="feature-section">
+                <h3 class="section-title">
+                    <span>📊</span>
+                    <span>开发概览</span>
+                </h3>
+                <div id="development-overview">
+                    <div class="loading">加载中...</div>
+                </div>
+            </div>
+
+            <div class="feature-section">
+                <h3 class="section-title">
+                    <span>⚙️</span>
+                    <span>工作流列表</span>
+                </h3>
+                <div id="workflows">
+                    <div class="loading">加载中...</div>
+                </div>
+            </div>
+        </div>
+
+        <!-- 数据同步页面 -->
+        <div class="page-content" id="sync">
+            <h2 class="page-title">数据同步中心</h2>
+            <p class="page-description">管理数据同步任务，支持跨集群、跨数据源的数据同步，确保数据一致性和时效性</p>
+
+            <div class="feature-section">
+                <h3 class="section-title">
+                    <span>📊</span>
+                    <span>同步概览</span>
+                </h3>
+                <div id="sync-overview">
+                    <div class="loading">加载中...</div>
+                </div>
+            </div>
+
+            <div class="feature-section">
+                <h3 class="section-title">
+                    <span>🔄</span>
+                    <span>同步任务列表</span>
+                </h3>
+                <div id="sync-tasks">
+                    <div class="loading">加载中...</div>
+                </div>
+            </div>
+        </div>
+
+        <!-- 数据治理页面 -->
+        <div class="page-content" id="governance">
+            <h2 class="page-title">数据治理平台</h2>
+            <p class="page-description">建立数据标准，管理数据质量，实现元数据管理和数据血缘分析</p>
+
+            <div class="feature-section">
+                <h3 class="section-title">
+                    <span>📊</span>
+                    <span>治理概览</span>
+                </h3>
+                <div id="governance-overview">
+                    <div class="loading">加载中...</div>
+                </div>
+            </div>
+
+            <div class="feature-section">
+                <h3 class="section-title">
+                    <span>📈</span>
+                    <span>数据质量报告</span>
+                </h3>
+                <div id="quality-report">
+                    <div class="loading">加载中...</div>
+                </div>
+            </div>
+
+            <div class="feature-section">
+                <h3 class="section-title">
+                    <span>📋</span>
+                    <span>治理规则</span>
+                </h3>
+                <div id="governance-rules">
+                    <div class="loading">加载中...</div>
+                </div>
+            </div>
+        </div>
+
+        <!-- 其他页面结构类似... -->
+        <div class="page-content" id="service">
+            <h2 class="page-title">数据服务</h2>
+            <p class="page-description">提供统一的数据服务接口，支持RESTful API、GraphQL等多种协议</p>
+        </div>
+
+        <div class="page-content" id="assets">
+            <h2 class="page-title">数据资产</h2>
+            <p class="page-description">全面管理企业数据资产，实现数据价值的最大化</p>
+        </div>
+
+        <div class="page-content" id="exploration">
+            <h2 class="page-title">数据探索</h2>
+            <p class="page-description">提供交互式数据探索工具，快速发现数据洞察</p>
+        </div>
+
+        <div class="page-content" id="schedule">
+            <h2 class="page-title">任务调度</h2>
+            <p class="page-description">灵活的任务调度管理，支持定时、依赖、手动等多种调度方式</p>
+        </div>
+
+        <div class="page-content" id="monitor">
+            <h2 class="page-title">作业监控</h2>
+            <p class="page-description">实时监控作业运行状态，及时发现和处理异常情况</p>
+        </div>
+
+        <div class="page-content" id="alert">
+            <h2 class="page-title">告警中心</h2>
+            <p class="page-description">集中管理系统告警，支持多种告警方式和规则配置</p>
+        </div>
+
+        <div class="page-content" id="users">
+            <h2 class="page-title">用户管理</h2>
+            <p class="page-description">管理系统用户，设置用户角色和权限</p>
+        </div>
+
+        <div class="page-content" id="permissions">
+            <h2 class="page-title">权限管理</h2>
+            <p class="page-description">细粒度的权限控制，确保数据安全</p>
+        </div>
+
+        <div class="page-content" id="logs">
+            <h2 class="page-title">审计日志</h2>
+            <p class="page-description">记录系统操作日志，满足合规审计要求</p>
+        </div>
+
+        <div class="page-content" id="config">
+            <h2 class="page-title">系统配置</h2>
+            <p class="page-description">配置系统参数，优化系统性能</p>
+        </div>
+    </div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+<script>
+    // API配置
+    const API_BASE = '/api/v1';
+
+    // 工具函数
+    function formatNumber(num) {
+        return new Intl.NumberFormat('zh-CN').format(num);
+    }
+
+    function formatDuration(seconds) {
+        if (seconds < 60) return `${seconds}秒`;
+        const minutes = Math.floor(seconds / 60);
+        const secs = seconds % 60;
+        return `${minutes}分${secs}秒`;
+    }
+
+    function formatDateTime(dateStr) {
+        const date = new Date(dateStr);
+        return date.toLocaleString('zh-CN', {
+            year: 'numeric',
+            month: '2-digit',
+            day: '2-digit',
+            hour: '2-digit',
+            minute: '2-digit'
+        });
+    }
+
+    // API请求函数
+    async function fetchAPI(endpoint) {
+        try {
+            const response = await fetch(`${API_BASE}${endpoint}`);
+            const data = await response.json();
+            return data;
+        } catch (error) {
+            console.error('API请求失败:', error);
+            return null;
+        }
+    }
+
+    // 加载数据总览
+    async function loadOverview() {
+        const data = await fetchAPI('/overview/');
+        if (!data || !data.stat_cards) return;
+
+        // 更新统计卡片
+        const statsContainer = document.getElementById('overview-stats');
+        statsContainer.innerHTML = data.stat_cards.map(card => `
+            <div class="stat-card">
+                <div class="stat-header">
+                    <span class="stat-title">${card.title}</span>
+                    <div class="stat-icon">${card.icon}</div>
+                </div>
+                <div class="stat-value">${card.value}</div>
+                <div class="stat-change ${card.change_type}">
+                    <span>${card.change_type === 'positive' ? '↗' : card.change_type === 'negative' ? '↘' : '⚠'}</span>
+                    <span>${card.change}</span>
+                </div>
+            </div>
+        `).join('');
+
+        // 更新集群状态
+        const clusterContainer = document.getElementById('overview-clusters');
+        clusterContainer.innerHTML = data.clusters.map(cluster => `
+            <div class="cluster-item">
+                <div class="cluster-name">${cluster.name}</div>
+                <div class="cluster-status-text">${cluster.status === 'normal' ? '运行正常' : '异常'}</div>
+                <div class="cluster-metrics">
+                    <span>节点: ${cluster.active_nodes}/${cluster.total_nodes}</span>
+                    <span>CPU: ${cluster.cpu_usage.toFixed(1)}%</span>
+                    <span>内存: ${cluster.memory_usage.toFixed(1)}%</span>
+                </div>
+            </div>
+        `).join('');
+
+        // 更新任务表格
+        const tasksTable = document.getElementById('tasks-table');
+        tasksTable.innerHTML = data.today_tasks.map(task => `
+            <tr>
+                <td>${task.task_name}</td>
+                <td>${task.business_system}</td>
+                <td>${task.data_source}</td>
+                <td>${task.target_table}</td>
+                <td>${formatDateTime(task.execution_time)}</td>
+                <td><span class="status-badge status-${task.status}">${getStatusText(task.status)}</span></td>
+                <td><span class="status-badge priority-${task.priority}">${getPriorityText(task.priority)}</span></td>
+                <td>${formatNumber(task.data_volume)} 条</td>
+                <td>${formatDuration(task.duration)}</td>
+                <td>
+                    <div class="action-buttons">
+                        <button class="action-btn" onclick="viewTaskDetails('${task.task_name}')">📊 查看</button>
+                        <button class="action-btn" onclick="viewTaskLogs('${task.task_name}')">📋 日志</button>
+                    </div>
+                </td>
+            </tr>
+        `).join('');
+
+        // 更新告警数量
+        const alerts = await fetchAPI('/cluster/alerts');
+        if (alerts && alerts.data && alerts.data.summary) {
+            document.getElementById('cluster-alerts').textContent = alerts.data.summary.active_alerts;
+            document.getElementById('alert-count').textContent = alerts.data.summary.active_alerts;
+        }
+    }
+
+    // 加载集群监控
+    async function loadClusterMonitoring() {
+        const clusters = await fetchAPI('/cluster/');
+        if (!clusters || !clusters.data) return;
+
+        // 更新集群统计
+        const resourceUsage = await fetchAPI('/cluster/resource-usage');
+        if (resourceUsage && resourceUsage.data) {
+            const summary = resourceUsage.data.summary;
+            const statsContainer = document.getElementById('cluster-stats');
+            statsContainer.innerHTML = `
+                <div class="stat-card">
+                    <div class="stat-header">
+                        <span class="stat-title">总CPU核心数</span>
+                        <div class="stat-icon">💻</div>
+                    </div>
+                    <div class="stat-value">${summary.total_cpu_cores}</div>
+                    <div class="stat-change positive">
+                        <span>使用率: ${summary.avg_cpu_usage.toFixed(1)}%</span>
+                    </div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-header">
+                        <span class="stat-title">总内存容量</span>
+                        <div class="stat-icon">🧠</div>
+                    </div>
+                    <div class="stat-value">${summary.total_memory_gb}GB</div>
+                    <div class="stat-change positive">
+                        <span>使用率: ${summary.avg_memory_usage.toFixed(1)}%</span>
+                    </div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-header">
+                        <span class="stat-title">活跃节点数</span>
+                        <div class="stat-icon">🖥️</div>
+                    </div>
+                    <div class="stat-value">${clusters.data.reduce((sum, c) => sum + c.active_nodes, 0)}</div>
+                    <div class="stat-change positive">
+                        <span>总节点: ${clusters.data.reduce((sum, c) => sum + c.total_nodes, 0)}</span>
+                    </div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-header">
+                        <span class="stat-title">集群健康度</span>
+                        <div class="stat-icon">⭐</div>
+                    </div>
+                    <div class="stat-value">95.2%</div>
+                    <div class="stat-change positive">
+                        <span>运行状态良好</span>
+                    </div>
+                </div>
+            `;
+        }
+
+        // 更新集群节点详情
+        const nodesContainer = document.getElementById('cluster-nodes-detail');
+        nodesContainer.innerHTML = clusters.data.map(cluster => `
+            <div class="feature-section">
+                <h4 class="section-title">${cluster.name}</h4>
+                <div class="node-grid">
+                    ${cluster.nodes_detail.map(node => `
+                        <div class="node-card">
+                            <div class="node-header">
+                                <span class="node-name">${node.node_name}</span>
+                                <span class="node-role">${node.role}</span>
+                            </div>
+                            <div class="node-metrics">
+                                <div class="metric-item">
+                                    <span class="metric-label">IP地址:</span>
+                                    <span class="metric-value">${node.ip_address}</span>
+                                </div>
+                                <div class="metric-item">
+                                    <span class="metric-label">状态:</span>
+                                    <span class="metric-value">${node.status}</span>
+                                </div>
+                                <div class="metric-item">
+                                    <span class="metric-label">CPU:</span>
+                                    <span class="metric-value">${node.cpu_usage.toFixed(1)}%</span>
+                                </div>
+                                <div class="metric-item">
+                                    <span class="metric-label">内存:</span>
+                                    <span class="metric-value">${node.memory_usage.toFixed(1)}%</span>
+                                </div>
+                                <div class="metric-item">
+                                    <span class="metric-label">磁盘:</span>
+                                    <span class="metric-value">${node.disk_usage}%</span>
+                                </div>
+                                <div class="metric-item">
+                                    <span class="metric-label">更新时间:</span>
+                                    <span class="metric-value">${new Date(node.last_heartbeat).toLocaleTimeString('zh-CN')}</span>
+                                </div>
+                            </div>
+                        </div>
+                    `).join('')}
+                </div>
+            </div>
+        `).join('');
+
+        // 初始化图表
+        initClusterChart();
+    }
+
+    // 加载数据接入
+    async function loadIngestion() {
+        const overview = await fetchAPI('/ingestion/');
+        const sources = await fetchAPI('/ingestion/sources');
+
+        if (overview && overview.data) {
+            const overviewContainer = document.getElementById('ingestion-overview');
+            overviewContainer.innerHTML = `
+                <div class="stats-grid">
+                    <div class="stat-card">
+                        <div class="stat-header">
+                            <span class="stat-title">数据源总数</span>
+                            <div class="stat-icon">🔌</div>
+                        </div>
+                        <div class="stat-value">${overview.data.total_sources}</div>
+                        <div class="stat-change positive">
+                            <span>活跃连接: ${overview.data.active_connections}</span>
+                        </div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-header">
+                            <span class="stat-title">今日数据量</span>
+                            <div class="stat-icon">📊</div>
+                        </div>
+                        <div class="stat-value">${overview.data.daily_volume}</div>
+                        <div class="stat-change positive">
+                            <span>成功率: ${overview.data.success_rate}%</span>
+                        </div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-header">
+                            <span class="stat-title">待处理任务</span>
+                            <div class="stat-icon">⏳</div>
+                        </div>
+                        <div class="stat-value">${overview.data.pending_tasks}</div>
+                        <div class="stat-change ${overview.data.failed_connections > 0 ? 'negative' : 'positive'}">
+                            <span>失败连接: ${overview.data.failed_connections}</span>
+                        </div>
+                    </div>
+                </div>
+            `;
+        }
+
+        if (sources && sources.data) {
+            const sourcesContainer = document.getElementById('data-sources');
+            sourcesContainer.innerHTML = sources.data.sources.map(source => `
+                <div class="source-card">
+                    <div class="source-status-indicator ${source.status === 'disconnected' ? 'disconnected' : ''}"></div>
+                    <div class="source-header">
+                        <span class="source-name">${source.name}</span>
+                        <span class="source-type">
+                            <i class="fas fa-database"></i>
+                            ${source.type}
+                        </span>
+                    </div>
+                    <div class="source-details">
+                        <div class="source-detail-item">
+                            <i class="fas fa-server"></i>
+                            <span>${source.host}:${source.port}</span>
+                        </div>
+                        <div class="source-detail-item">
+                            <i class="fas fa-database"></i>
+                            <span>${source.database}</span>
+                        </div>
+                        <div class="source-detail-item">
+                            <i class="fas fa-table"></i>
+                            <span>${source.tables_count} 张表</span>
+                        </div>
+                        <div class="source-detail-item">
+                            <i class="fas fa-hdd"></i>
+                            <span>${source.estimated_size}</span>
+                        </div>
+                        <div class="source-detail-item">
+                            <i class="fas fa-clock"></i>
+                            <span>最后测试: ${formatDateTime(source.last_test)}</span>
+                        </div>
+                        <div class="source-detail-item">
+                            <i class="fas fa-${source.status === 'connected' ? 'check-circle' : 'times-circle'}"></i>
+                            <span>${source.status === 'connected' ? '连接正常' : source.error_message || '连接失败'}</span>
+                        </div>
+                    </div>
+                </div>
+            `).join('');
+        }
+    }
+
+    // 加载数据开发
+    async function loadDevelopment() {
+        const overview = await fetchAPI('/development/');
+        const workflows = await fetchAPI('/development/workflows');
+
+        if (overview && overview.data) {
+            const overviewContainer = document.getElementById('development-overview');
+            overviewContainer.innerHTML = `
+                <div class="stats-grid">
+                    <div class="stat-card">
+                        <div class="stat-header">
+                            <span class="stat-title">工作流总数</span>
+                            <div class="stat-icon">⚙️</div>
+                        </div>
+                        <div class="stat-value">${overview.data.total_workflows}</div>
+                        <div class="stat-change positive">
+                            <span>运行中: ${overview.data.running_workflows}</span>
+                        </div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-header">
+                            <span class="stat-title">今日完成</span>
+                            <div class="stat-icon">✅</div>
+                        </div>
+                        <div class="stat-value">${overview.data.completed_today}</div>
+                        <div class="stat-change ${overview.data.failed_today > 0 ? 'negative' : 'positive'}">
+                            <span>失败: ${overview.data.failed_today}</span>
+                        </div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-header">
+                            <span class="stat-title">平均执行时间</span>
+                            <div class="stat-icon">⏱️</div>
+                        </div>
+                        <div class="stat-value">${overview.data.avg_execution_time}</div>
+                        <div class="stat-change positive">
+                            <span>成功率: ${overview.data.success_rate}%</span>
+                        </div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-header">
+                            <span class="stat-title">代码资产</span>
+                            <div class="stat-icon">📝</div>
+                        </div>
+                        <div class="stat-value">${overview.data.sql_scripts + overview.data.python_scripts}</div>
+                        <div class="stat-change positive">
+                            <span>SQL: ${overview.data.sql_scripts}, Python: ${overview.data.python_scripts}</span>
+                        </div>
+                    </div>
+                </div>
+            `;
+        }
+
+        if (workflows && workflows.data) {
+            const workflowsContainer = document.getElementById('workflows');
+            workflowsContainer.innerHTML = workflows.data.workflows.map(workflow => `
+                <div class="workflow-card">
+                    <div class="workflow-header">
+                        <span class="workflow-name">${workflow.name}</span>
+                        <span class="workflow-type">${workflow.type}</span>
+                    </div>
+                    <div class="workflow-info">
+                        <div class="workflow-stat">
+                            <span class="workflow-stat-label">状态</span>
+                            <span class="workflow-stat-value">
+                                <span class="status-badge status-${workflow.status}">${getStatusText(workflow.status)}</span>
+                            </span>
+                        </div>
+                        <div class="workflow-stat">
+                            <span class="workflow-stat-label">上次运行</span>
+                            <span class="workflow-stat-value">${formatDateTime(workflow.last_run)}</span>
+                        </div>
+                        <div class="workflow-stat">
+                            <span class="workflow-stat-label">平均耗时</span>
+                            <span class="workflow-stat-value">${workflow.avg_duration}</span>
+                        </div>
+                        <div class="workflow-stat">
+                            <span class="workflow-stat-label">成功率</span>
+                            <span class="workflow-stat-value">${workflow.success_rate}%</span>
+                        </div>
+                        <div class="workflow-stat">
+                            <span class="workflow-stat-label">创建者</span>
+                            <span class="workflow-stat-value">${workflow.created_by}</span>
+                        </div>
+                        <div class="workflow-stat">
+                            <span class="workflow-stat-label">下次运行</span>
+                            <span class="workflow-stat-value">${workflow.next_run ? formatDateTime(workflow.next_run) : '无'}</span>
+                        </div>
+                    </div>
+                </div>
+            `).join('');
+        }
+    }
+
+    // 加载数据同步
+    async function loadSync() {
+        const overview = await fetchAPI('/sync/');
+        const tasks = await fetchAPI('/sync/tasks');
+
+        if (overview && overview.data) {
+            const overviewContainer = document.getElementById('sync-overview');
+            overviewContainer.innerHTML = `
+                <div class="stats-grid">
+                    <div class="stat-card">
+                        <div class="stat-header">
+                            <span class="stat-title">同步任务总数</span>
+                            <div class="stat-icon">🔄</div>
+                        </div>
+                        <div class="stat-value">${overview.data.total_sync_tasks}</div>
+                        <div class="stat-change positive">
+                            <span>活跃任务: ${overview.data.active_tasks}</span>
+                        </div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-header">
+                            <span class="stat-title">今日完成</span>
+                            <div class="stat-icon">✅</div>
+                        </div>
+                        <div class="stat-value">${overview.data.completed_today}</div>
+                        <div class="stat-change ${overview.data.failed_today > 0 ? 'negative' : 'positive'}">
+                            <span>失败: ${overview.data.failed_today}</span>
+                        </div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-header">
+                            <span class="stat-title">今日数据量</span>
+                            <div class="stat-icon">💾</div>
+                        </div>
+                        <div class="stat-value">${overview.data.sync_volume_today}</div>
+                        <div class="stat-change positive">
+                            <span>平均速率: ${overview.data.performance_metrics.avg_throughput}</span>
+                        </div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-header">
+                            <span class="stat-title">成功率</span>
+                            <div class="stat-icon">📊</div>
+                        </div>
+                        <div class="stat-value">${overview.data.performance_metrics.success_rate}%</div>
+                        <div class="stat-change positive">
+                            <span>峰值速率: ${overview.data.performance_metrics.peak_throughput}</span>
+                        </div>
+                    </div>
+                </div>
+            `;
+        }
+
+        if (tasks && tasks.data) {
+            const tasksContainer = document.getElementById('sync-tasks');
+            tasksContainer.innerHTML = tasks.data.tasks.map(task => `
+                <div class="sync-card">
+                    <div class="sync-header">
+                        <span class="sync-name">${task.name}</span>
+                        <span class="status-badge status-${task.status}">${getStatusText(task.status)}</span>
+                    </div>
+                    ${task.status === 'running' ? `
+                        <div class="sync-progress">
+                            <div class="sync-progress-text">
+                                <span>进度: ${task.progress}%</span>
+                                <span>${task.data_volume}</span>
+                            </div>
+                            <div class="progress-bar">
+                                <div class="progress-fill" style="width: ${task.progress}%"></div>
+                            </div>
+                        </div>
+                    ` : ''}
+                    <div class="sync-details">
+                        <div class="workflow-stat">
+                            <span class="workflow-stat-label">数据源</span>
+                            <span class="workflow-stat-value">${task.source}</span>
+                        </div>
+                        <div class="workflow-stat">
+                            <span class="workflow-stat-label">目标</span>
+                            <span class="workflow-stat-value">${task.target}</span>
+                        </div>
+                        <div class="workflow-stat">
+                            <span class="workflow-stat-label">同步类型</span>
+                            <span class="workflow-stat-value">${getSyncTypeText(task.sync_type)}</span>
+                        </div>
+                        <div class="workflow-stat">
+                            <span class="workflow-stat-label">开始时间</span>
+                            <span class="workflow-stat-value">${formatDateTime(task.start_time)}</span>
+                        </div>
+                        <div class="workflow-stat">
+                            <span class="workflow-stat-label">同步频率</span>
+                            <span class="workflow-stat-value">${getSyncFrequencyText(task.sync_frequency)}</span>
+                        </div>
+                        <div class="workflow-stat">
+                            <span class="workflow-stat-label">错误次数</span>
+                            <span class="workflow-stat-value">${task.error_count}</span>
+                        </div>
+                    </div>
+                    ${task.error_message ? `
+                        <div class="alert alert-error">
+                            <i class="fas fa-exclamation-circle"></i>
+                            ${task.error_message}
+                        </div>
+                    ` : ''}
+                </div>
+            `).join('');
+        }
+    }
+
+    // 加载数据治理
+    async function loadGovernance() {
+        const overview = await fetchAPI('/governance/');
+        const quality = await fetchAPI('/governance/quality');
+        const rules = await fetchAPI('/governance/rules');
+
+        if (overview && overview.data) {
+            const overviewContainer = document.getElementById('governance-overview');
+            overviewContainer.innerHTML = `
+                <div class="stats-grid">
+                    <div class="stat-card">
+                        <div class="stat-header">
+                            <span class="stat-title">数据质量评分</span>
+                            <div class="stat-icon">⭐</div>
+                        </div>
+                        <div class="stat-value">${overview.data.data_quality_score}%</div>
+                        <div class="stat-change ${overview.data.trends.quality_trend === 'improving' ? 'positive' : 'warning'}">
+                            <span>${overview.data.trends.quality_trend === 'improving' ? '↗' : '→'}</span>
+                            <span>趋势: ${getTrendText(overview.data.trends.quality_trend)}</span>
+                        </div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-header">
+                            <span class="stat-title">数据表总数</span>
+                            <div class="stat-icon">📋</div>
+                        </div>
+                        <div class="stat-value">${formatNumber(overview.data.total_tables)}</div>
+                        <div class="stat-change positive">
+                            <span>已编目: ${formatNumber(overview.data.cataloged_tables)}</span>
+                        </div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-header">
+                            <span class="stat-title">治理规则</span>
+                            <div class="stat-icon">📏</div>
+                        </div>
+                        <div class="stat-value">${overview.data.governance_rules}</div>
+                        <div class="stat-change positive">
+                            <span>活跃规则: ${overview.data.active_rules}</span>
+                        </div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-header">
+                            <span class="stat-title">质量问题</span>
+                            <div class="stat-icon">⚠️</div>
+                        </div>
+                        <div class="stat-value">${overview.data.quality_issues}</div>
+                        <div class="stat-change ${overview.data.trends.issues_trend === 'decreasing' ? 'positive' : 'negative'}">
+                            <span>${overview.data.trends.issues_trend === 'decreasing' ? '↘' : '↗'}</span>
+                            <span>趋势: ${getTrendText(overview.data.trends.issues_trend)}</span>
+                        </div>
+                    </div>
+                </div>
+            `;
+        }
+
+        if (quality && quality.data) {
+            const qualityContainer = document.getElementById('quality-report');
+            qualityContainer.innerHTML = `
+                <div class="quality-dimensions">
+                    ${Object.entries(quality.data.dimensions).map(([key, value]) => `
+                        <div class="dimension-card">
+                            <div class="dimension-score">${value.toFixed(1)}%</div>
+                            <div class="dimension-name">${getDimensionText(key)}</div>
+                        </div>
+                    `).join('')}
+                </div>
+                ${quality.data.quality_issues && quality.data.quality_issues.length > 0 ? `
+                    <h4 style="margin-top: 20px; margin-bottom: 15px;">质量问题</h4>
+                    ${quality.data.quality_issues.map(issue => `
+                        <div class="alert alert-${issue.severity === 'high' ? 'error' : 'warning'}">
+                            <div>
+                                <strong>${issue.table}.${issue.column}</strong>: ${issue.issue}
+                                <br>
+                                <small>影响 ${formatNumber(issue.affected_rows)} 行 (${issue.percentage}%) - ${issue.status === 'open' ? '待处理' : '处理中'}</small>
+                            </div>
+                        </div>
+                    `).join('')}
+                ` : ''}
+            `;
+        }
+
+        if (rules && rules.data) {
+            const rulesContainer = document.getElementById('governance-rules');
+            rulesContainer.innerHTML = rules.data.rules.map(rule => `
+                <div class="rule-card">
+                    <div class="rule-header">
+                        <span class="rule-name">${rule.name}</span>
+                        <span class="rule-type">${rule.type}</span>
+                    </div>
+                    <div class="rule-details">${rule.description}</div>
+                    <div class="rule-stats">
+                        <div class="rule-stat">
+                            <i class="fas fa-${rule.status === 'active' ? 'play-circle' : 'pause-circle'}"></i>
+                            <span>${rule.status === 'active' ? '运行中' : '已暂停'}</span>
+                        </div>
+                        <div class="rule-stat">
+                            <i class="fas fa-clock"></i>
+                            <span>${rule.execution_frequency === 'daily' ? '每日' : rule.execution_frequency === 'hourly' ? '每小时' : '持续'}</span>
+                        </div>
+                        <div class="rule-stat">
+                            <i class="fas fa-exclamation-triangle"></i>
+                            <span>违规: ${rule.violation_count}</span>
+                        </div>
+                        <div class="rule-stat">
+                            <i class="fas fa-chart-line"></i>
+                            <span>成功率: ${rule.success_rate}%</span>
+                        </div>
+                    </div>
+                </div>
+            `).join('');
+        }
+    }
+
+    // 状态文本映射
+    function getStatusText(status) {
+        const statusMap = {
+            'running': '运行中',
+            'success': '成功',
+            'completed': '已完成',
+            'failed': '失败',
+            'pending': '等待中',
+            'paused': '已暂停'
+        };
+        return statusMap[status] || status;
+    }
+
+    function getPriorityText(priority) {
+        const priorityMap = {
+            'high': '高',
+            'medium': '中',
+            'low': '低'
+        };
+        return priorityMap[priority] || priority;
+    }
+
+    function getSyncTypeText(type) {
+        const typeMap = {
+            'full': '全量同步',
+            'incremental': '增量同步',
+            'streaming': '实时流'
+        };
+        return typeMap[type] || type;
+    }
+
+    function getSyncFrequencyText(frequency) {
+        const frequencyMap = {
+            'hourly': '每小时',
+            'daily': '每日',
+            'every_4_hours': '每4小时',
+            'continuous': '持续运行'
+        };
+        return frequencyMap[frequency] || frequency;
+    }
+
+    function getTrendText(trend) {
+        const trendMap = {
+            'improving': '改善中',
+            'stable': '稳定',
+            'decreasing': '下降中',
+            'increasing': '上升中'
+        };
+        return trendMap[trend] || trend;
+    }
+
+    function getDimensionText(dimension) {
+        const dimensionMap = {
+            'completeness': '完整性',
+            'accuracy': '准确性',
+            'consistency': '一致性',
+            'timeliness': '及时性',
+            'validity': '有效性',
+            'uniqueness': '唯一性'
+        };
+        return dimensionMap[dimension] || dimension;
+    }
+
+    // 初始化集群图表
+    async function initClusterChart() {
+        const metrics = await fetchAPI('/cluster/metrics');
+        if (!metrics || !metrics.data) return;
+
+        const ctx = document.getElementById('clusterChart');
+        if (!ctx) return;
+
+        new Chart(ctx.getContext('2d'), {
+            type: 'line',
+            data: {
+                labels: metrics.data.time_series.slice(-12),
+                datasets: [
+                    {
+                        label: 'CPU使用率(%)',
+                        data: metrics.data.cpu_usage.slice(-12),
+                        borderColor: '#1e3c72',
+                        backgroundColor: 'rgba(30, 60, 114, 0.1)',
+                        tension: 0.3,
+                        fill: true
+                    },
+                    {
+                        label: '内存使用率(%)',
+                        data: metrics.data.memory_usage.slice(-12),
+                        borderColor: '#28a745',
+                        backgroundColor: 'rgba(40, 167, 69, 0.1)',
+                        tension: 0.3,
+                        fill: true
+                    }
+                ]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                scales: {
+                    y: {
+                        beginAtZero: true,
+                        max: 100
+                    }
+                }
+            }
+        });
+    }
+
+    // 任务操作函数
+    function viewTaskDetails(taskName) {
+        alert(`查看任务详情: ${taskName}`);
+    }
+
+    function viewTaskLogs(taskName) {
+        alert(`查看任务日志: ${taskName}`);
+    }
+
+    function filterTasks() {
+        const searchValue = document.getElementById('task-search').value.toLowerCase();
+        const filterValue = document.getElementById('task-filter').value;
+
+        // 这里可以实现表格过滤逻辑
+        console.log('搜索:', searchValue, '过滤:', filterValue);
+    }
+
+    // 页面切换功能
+    document.addEventListener('DOMContentLoaded', function() {
+        // 获取所有导航链接
+        const navLinks = document.querySelectorAll('.nav-link');
+        // 获取所有页面内容
+        const pageContents = document.querySelectorAll('.page-content');
+        const sidebar = document.querySelector('.sidebar');
+        const toggleBtn = document.querySelector('.toggle-sidebar');
+
+        // 为每个导航链接添加点击事件
+        navLinks.forEach(link => {
+            link.addEventListener('click', async function() {
+                const targetPage = this.getAttribute('data-page');
+
+                // 更新导航激活状态
+                navLinks.forEach(link => link.classList.remove('active'));
+                this.classList.add('active');
+
+                // 切换页面内容
+                for (const content of pageContents) {
+                    content.classList.remove('active');
+                    if(content.id === targetPage) {
+                        content.classList.add('active');
+
+                        // 更新页面标题和面包屑导航
+                        const navText = this.querySelector('.nav-text').textContent;
+                        document.querySelector('.header-title').textContent = navText;
+                        document.querySelector('.current-page').textContent = navText;
+
+                        // 根据页面加载相应数据
+                        switch(targetPage) {
+                            case 'overview':
+                                await loadOverview();
+                                break;
+                            case 'cluster':
+                                await loadClusterMonitoring();
+                                break;
+                            case 'ingestion':
+                                await loadIngestion();
+                                break;
+                            case 'development':
+                                await loadDevelopment();
+                                break;
+                            case 'sync':
+                                await loadSync();
+                                break;
+                            case 'governance':
+                                await loadGovernance();
+                                break;
+                        }
+                    }
+                }
+
+                // 在移动端点击后关闭侧边栏
+                if (window.innerWidth <= 768) {
+                    sidebar.classList.remove('active');
+                }
+            });
+        });
+
+        // 刷新数据按钮功能
+        document.getElementById('refresh-btn').addEventListener('click', async function() {
+            const btn = this;
+            const originalText = btn.innerHTML;
+
+            btn.innerHTML = '<span class="loading"></span> 刷新中...';
+            btn.disabled = true;
+
+            // 获取当前页面并刷新数据
+            const activePage = document.querySelector('.page-content.active').id;
+            try {
+                switch(activePage) {
+                    case 'overview':
+                        await loadOverview();
+                        break;
+                    case 'cluster':
+                        await loadClusterMonitoring();
+                        break;
+                    case 'ingestion':
+                        await loadIngestion();
+                        break;
+                    case 'development':
+                        await loadDevelopment();
+                        break;
+                    case 'sync':
+                        await loadSync();
+                        break;
+                    case 'governance':
+                        await loadGovernance();
+                        break;
+                }
+
+                // 显示成功提示
+                const alert = document.createElement('div');
+                alert.className = 'alert alert-success';
+                alert.innerHTML = '<i class="fas fa-check-circle"></i> 数据刷新成功！';
+                alert.style.position = 'fixed';
+                alert.style.top = '20px';
+                alert.style.right = '20px';
+                alert.style.zIndex = '1000';
+                document.body.appendChild(alert);
+
+                setTimeout(() => alert.remove(), 3000);
+            } catch (error) {
+                console.error('刷新失败:', error);
+            }
+
+            btn.innerHTML = originalText;
+            btn.disabled = false;
+        });
+
+        // 侧边栏切换按钮
+        toggleBtn.addEventListener('click', function() {
+            sidebar.classList.toggle('active');
+        });
+
+        // 初始加载数据总览
+        loadOverview();
+
+        // 定时刷新数据（每30秒）
+        setInterval(async () => {
+            const activePage = document.querySelector('.page-content.active').id;
+            if (activePage === 'overview') {
+                await loadOverview();
+            }
+        }, 30000);
+    });
+</script>
+</body>
+</html>

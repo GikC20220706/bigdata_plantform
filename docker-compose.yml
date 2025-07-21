@@ -1,0 +1,187 @@
+# docker-compose.yml
+version: '3.8'
+
+services:
+  # Redis for caching
+  redis:
+    image: redis:7-alpine
+    container_name: bigdata-redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    command: redis-server --appendonly yes --maxmemory 512mb --maxmemory-policy allkeys-lru
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - bigdata-network
+
+  # Main application
+  bigdata-platform:
+    build: .
+    container_name: bigdata-platform
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    environment:
+      # Application settings
+      - DEBUG=false
+      - HOST=0.0.0.0
+      - PORT=8000
+      - IS_LOCAL_DEV=false
+      - MOCK_DATA_MODE=false
+
+      # Redis configuration
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - REDIS_DB=0
+
+      # Cache configuration
+      - CACHE_DEFAULT_EXPIRE=300
+      - CACHE_OVERVIEW_EXPIRE=60
+      - CACHE_CLUSTER_EXPIRE=30
+      - CACHE_METRICS_EXPIRE=15
+
+      # Database configuration (if using external DB)
+      - DB_HOST=${DB_HOST:-localhost}
+      - DB_PORT=${DB_PORT:-3306}
+      - DB_USER=${DB_USER:-root}
+      - DB_PASSWORD=${DB_PASSWORD:-}
+      - DB_NAME=${DB_NAME:-bigdata_platform}
+
+      # Hadoop cluster configuration
+      - HADOOP_NAMENODE_HOST=${HADOOP_NAMENODE_HOST:-192.168.1.100}
+      - HADOOP_NAMENODE_PORT=${HADOOP_NAMENODE_PORT:-9000}
+      - HADOOP_WEBHDFS_PORT=${HADOOP_WEBHDFS_PORT:-9870}
+      - HADOOP_RM_HOST=${HADOOP_RM_HOST:-192.168.1.100}
+      - HADOOP_RM_PORT=${HADOOP_RM_PORT:-8088}
+
+      # Hive configuration
+      - HIVE_HOST=${HIVE_HOST:-192.168.1.100}
+      - HIVE_PORT=${HIVE_PORT:-10000}
+      - HIVE_USERNAME=${HIVE_USERNAME:-hive}
+      - HIVE_PASSWORD=${HIVE_PASSWORD:-}
+
+      # Flink configuration
+      - FLINK_JOBMANAGER_HOST=${FLINK_JOBMANAGER_HOST:-192.168.1.100}
+      - FLINK_JOBMANAGER_PORT=${FLINK_JOBMANAGER_PORT:-8081}
+
+      # Doris configuration
+      - DORIS_FE_HOST=${DORIS_FE_HOST:-192.168.1.100}
+      - DORIS_FE_PORT=${DORIS_FE_PORT:-8060}
+      - DORIS_USERNAME=${DORIS_USERNAME:-root}
+      - DORIS_PASSWORD=${DORIS_PASSWORD:-}
+
+      # Monitoring configuration
+      - METRICS_CACHE_TTL=${METRICS_CACHE_TTL:-30}
+      - METRICS_SSH_TIMEOUT=${METRICS_SSH_TIMEOUT:-5}
+      - METRICS_MAX_CONCURRENT=${METRICS_MAX_CONCURRENT:-5}
+
+      # Cluster nodes configuration (JSON string)
+      - CLUSTER_NODES_CONFIG=${CLUSTER_NODES_CONFIG:-}
+      - CLUSTER_AUTO_DISCOVERY=${CLUSTER_AUTO_DISCOVERY:-false}
+
+      # Security
+      - SECRET_KEY=${SECRET_KEY:-your-secret-key-change-in-production}
+
+      # Logging
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+
+    volumes:
+      - ./logs:/app/logs
+      - ./data:/app/data
+      - ./config:/app/config
+      - ./ssh_keys:/app/ssh_keys:ro  # SSH keys for cluster access
+
+    depends_on:
+      redis:
+        condition: service_healthy
+
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/api/v1/overview/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+    networks:
+      - bigdata-network
+
+  # Nginx reverse proxy (optional, for production)
+  nginx:
+    image: nginx:alpine
+    container_name: bigdata-nginx
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./nginx/ssl:/etc/nginx/ssl:ro
+    depends_on:
+      - bigdata-platform
+    networks:
+      - bigdata-network
+    profiles:
+      - production
+
+  # Monitoring with Prometheus (optional)
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: bigdata-prometheus
+    restart: unless-stopped
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus_data:/prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--web.console.libraries=/etc/prometheus/console_libraries'
+      - '--web.console.templates=/etc/prometheus/consoles'
+      - '--storage.tsdb.retention.time=200h'
+      - '--web.enable-lifecycle'
+    networks:
+      - bigdata-network
+    profiles:
+      - monitoring
+
+  # Grafana for visualization (optional)
+  grafana:
+    image: grafana/grafana:latest
+    container_name: bigdata-grafana
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    environment:
+      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_PASSWORD:-admin}
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./monitoring/grafana/dashboards:/etc/grafana/provisioning/dashboards:ro
+      - ./monitoring/grafana/datasources:/etc/grafana/provisioning/datasources:ro
+    depends_on:
+      - prometheus
+    networks:
+      - bigdata-network
+    profiles:
+      - monitoring
+
+volumes:
+  redis_data:
+    driver: local
+  prometheus_data:
+    driver: local
+  grafana_data:
+    driver: local
+
+networks:
+  bigdata-network:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.20.0.0/16
