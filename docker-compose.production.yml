@@ -1,0 +1,36 @@
+version: '3.8'
+services:
+  redis:
+    image: redis:7-alpine
+    container_name: bigdata-redis
+    restart: unless-stopped
+    volumes:
+      - redis_data:/data
+    networks:
+      - bigdata-network
+
+  bigdata-platform:
+    build: .
+    container_name: bigdata-platform
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    env_file:
+      - .env
+    volumes:
+      - ./logs:/app/logs
+      - ./uploads:/app/uploads
+      - ./data:/app/data
+      - ./config:/app/config:ro
+      - ./ssh_keys:/app/ssh_keys:ro
+    depends_on:
+      - redis
+    networks:
+      - bigdata-network
+
+volumes:
+  redis_data:
+
+networks:
+  bigdata-network:
+    driver: bridge

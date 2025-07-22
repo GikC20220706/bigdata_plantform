@@ -47,10 +47,12 @@ COPY . .
 
 # Create necessary directories
 RUN mkdir -p /app/logs /app/data/uploads /app/data/sample_data
+RUN mkdir -p /app/config /app/ssh_keys
 
 # Create non-root user
 RUN groupadd -r appuser && useradd -r -g appuser appuser
 RUN chown -R appuser:appuser /app
+RUN chown -R atguigu:atguigu /app/config /app/ssh_keys
 USER appuser
 
 # Expose port

@@ -4,18 +4,23 @@ uvicorn[standard]==0.24.0
 pydantic==2.5.0
 pydantic-settings==2.1.0
 
+# ASGI server
+gunicorn==21.2.0
+
 # Database and ORM
 sqlalchemy==2.0.23
 alembic==1.13.1
-asyncpg==0.29.0  # PostgreSQL async driver
-aiomysql==0.2.0  # MySQL async driver
-sqlite3  # Built-in, for development
+
+# Async database drivers
+asyncpg==0.29.0
+aiomysql==0.2.0
+# Note: sqlite3 is built-in
 
 # Redis for caching
 redis[hiredis]==5.0.1
 aioredis==2.0.1
 
-# HTTP client
+# HTTP clients
 aiohttp==3.9.1
 httpx==0.25.2
 requests==2.31.0
@@ -26,35 +31,34 @@ psutil==5.9.6
 
 # Big data ecosystem clients
 pyhive[hive]==0.7.0
-hdfs3==0.3.1
-hdfs==2.7.0
 sasl==0.3.1
 thrift==0.16.0
 thrift-sasl==0.4.3
+
+# Alternative Hive client
+pyhive==0.7.0
 
 # Data processing
 pandas==2.1.4
 numpy==1.24.4
 pyarrow==14.0.2
 
+# Excel file handling
+openpyxl==3.1.2
+xlrd==2.0.1
+
+# File upload handling
+python-multipart==0.0.6
+
 # Logging
 loguru==0.7.2
 
-# Configuration and environment
+# Configuration
 python-dotenv==1.0.0
 click==8.1.7
 
-# Async utilities
-asyncio
-concurrent.futures  # Built-in
-
-# Date and time
+# Date and time utilities
 python-dateutil==2.8.2
-
-# File handling
-openpyxl==3.1.2  # Excel files
-xlrd==2.0.1      # Excel files
-python-multipart==0.0.6  # File uploads
 
 # Security
 cryptography==41.0.8
@@ -63,22 +67,31 @@ bcrypt==4.1.2
 # JSON handling
 ujson==5.8.0
 
-# Development and testing (optional)
-pytest==7.4.3
-pytest-asyncio==0.21.1
-black==23.11.0
-flake8==6.1.0
-mypy==1.7.1
+# Type checking support
+typing-extensions==4.8.0
 
-# Production server
-gunicorn==21.2.0
+# Additional database drivers for data integration
+# MySQL driver alternative
+PyMySQL==1.1.0
 
-# Monitoring and metrics (optional)
+# PostgreSQL driver for KingBase compatibility
+psycopg2-binary==2.9.9
+
+# For async operations
+asyncio-throttle==1.0.2
+
+# HTTP server
+waitress==2.1.2
+
+# Data validation
+email-validator==2.1.0
+
+# For monitoring and metrics
 prometheus-client==0.19.0
 
-# CORS support
-fastapi-cors==0.0.6
+# Development dependencies (optional, can be removed in production)
+pytest==7.4.3
+pytest-asyncio==0.21.1
 
-# Additional utilities
-typing-extensions==4.8.0
-python-json-logger==2.0.7
+# Production optimizations
+orjson==3.9.10
