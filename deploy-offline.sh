@@ -498,7 +498,7 @@ EOF
 EOF
 
     # Create the final package
-    tar -czf ${PACKAGE_NAME} -C deployment_package .
+    tar -czf ${PACKAGE_NAME} -C deployment_package --transform 's,^,bigdata-platform-deployment/,' .
 
     log "Deployment package created: ${PACKAGE_NAME}"
 }
