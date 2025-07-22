@@ -252,16 +252,31 @@ EOF
 
 # Function to build Docker image
 # 在build_image函数中替换原来的docker build命令
+# 找到build_image函数，替换为以下内容：
 build_image() {
     log "Building Docker image for ARM64 architecture..."
 
-    # 创建buildx builder
-    docker buildx create --name multiarch --driver docker-container --use || true
+    # 检查并创建buildx builder
+    if ! docker buildx ls | grep -q "multiarch"; then
+        log "Creating buildx builder for multi-architecture..."
+        docker buildx create --name multiarch --driver docker-container --use
+    else
+        log "Using existing buildx builder..."
+        docker buildx use multiarch
+    fi
+
+    # 启动builder
+    docker buildx inspect --bootstrap
 
     # 构建ARM64镜像
     docker buildx build --platform linux/arm64 -t ${IMAGE_NAME}:${IMAGE_TAG} . --load
 
-    log "ARM64 Docker image built successfully: ${IMAGE_NAME}:${IMAGE_TAG}"
+    if [ $? -eq 0 ]; then
+        log "ARM64 Docker image built successfully: ${IMAGE_NAME}:${IMAGE_TAG}"
+    else
+        error "Failed to build ARM64 Docker image"
+        exit 1
+    fi
 }
 
 # Function to export Docker images
