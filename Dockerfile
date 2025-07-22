@@ -1,4 +1,4 @@
-# Dockerfile - 修复版本
+# Dockerfile - 修复版本，使用 bigdata 用户
 FROM debian:bullseye
 
 # Set working directory
@@ -33,6 +33,7 @@ RUN apt-get update && apt-get install -y \
     curl \
     netcat \
     pkg-config \
+    sudo \
     && rm -rf /var/lib/apt/lists/*
 
 # 创建python3软链接
@@ -46,14 +47,21 @@ RUN pip3 install --no-cache-dir -r requirements.txt -i https://mirrors.aliyun.co
 COPY . .
 
 # Create necessary directories
-RUN mkdir -p /app/logs /app/data/uploads /app/data/sample_data
-RUN mkdir -p /app/config /app/ssh_keys
+RUN mkdir -p /app/logs /app/data/uploads /app/data/sample_data /app/config /app/ssh_keys
 
-# Create non-root user
-RUN groupadd -r appuser && useradd -r -g appuser appuser
-RUN chown -R appuser:appuser /app
-RUN chown -R atguigu:atguigu /app/config /app/ssh_keys
-USER appuser
+# Create bigdata user and group with consistent UID/GID
+# Using UID 1000 which is common for the first user on Linux systems
+RUN groupadd -g 1000 bigdata && \
+    useradd -u 1000 -g bigdata -m -s /bin/bash bigdata && \
+    usermod -aG sudo bigdata
+
+# Set proper ownership and permissions
+RUN chown -R bigdata:bigdata /app && \
+    chmod -R 755 /app && \
+    chmod 700 /app/ssh_keys
+
+# Switch to bigdata user
+USER bigdata
 
 # Expose port
 EXPOSE 8000
