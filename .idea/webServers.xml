@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project version="4">
+  <component name="WebServers">
+    <option name="servers">
+      <webServer id="29e24ecb-e964-45b5-b23e-2e5c53d6c82c" name="101">
+        <fileTransfer rootFolder="/opt/module/bigdata-platform" accessType="SFTP" host="hadoop101" port="22" sshConfigId="e43bafe7-b746-4915-873e-67a36ec4340e" sshConfig="bigdata@hadoop101:22 password">
+          <advancedOptions>
+            <advancedOptions dataProtectionLevel="Private" keepAliveTimeout="0" passiveMode="true" shareSSLContext="true" />
+          </advancedOptions>
+        </fileTransfer>
+      </webServer>
+    </option>
+  </component>
+</project>

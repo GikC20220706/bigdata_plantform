@@ -1,3 +1,6 @@
+FROM --platform=$BUILDPLATFORM debian:bullseye
+ARG BUILDPLATFORM
+ARG TARGETPLATFORM
 # Dockerfile - 修复版本，使用 bigdata 用户
 FROM debian:bullseye
 

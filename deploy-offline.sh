@@ -251,49 +251,30 @@ EOF
 }
 
 # Function to build Docker image
+# 在build_image函数中替换原来的docker build命令
 build_image() {
-    log "Building Docker image..."
+    log "Building Docker image for ARM64 architecture..."
 
-    # Pull base images first (if online)
-    if ping -c 1 google.com &> /dev/null; then
-        log "Network available, pulling base images..."
-        docker pull debian:bullseye
-        docker pull redis:7-alpine
-    else
-        warn "No network connection, using local base images"
-    fi
+    # 创建buildx builder
+    docker buildx create --name multiarch --driver docker-container --use || true
 
-    # Build the application image
-    docker build -t ${IMAGE_NAME}:${IMAGE_TAG} .
+    # 构建ARM64镜像
+    docker buildx build --platform linux/arm64 -t ${IMAGE_NAME}:${IMAGE_TAG} . --load
 
-    if [ $? -eq 0 ]; then
-        log "Docker image built successfully: ${IMAGE_NAME}:${IMAGE_TAG}"
-    else
-        error "Failed to build Docker image"
-        exit 1
-    fi
+    log "ARM64 Docker image built successfully: ${IMAGE_NAME}:${IMAGE_TAG}"
 }
 
 # Function to export Docker images
+# 在export_images函数中
 export_images() {
-    log "Exporting Docker images for offline deployment..."
+    log "Exporting ARM64 Docker images..."
 
-    # Create deployment package directory
-    mkdir -p deployment_package
+    # 导出应用镜像
+    docker save ${IMAGE_NAME}:${IMAGE_TAG} > deployment_package/${IMAGE_NAME}-arm64-${IMAGE_TAG}.tar
 
-    # Export application image
-    log "Exporting application image..."
-    docker save ${IMAGE_NAME}:${IMAGE_TAG} > deployment_package/${IMAGE_NAME}-${IMAGE_TAG}.tar
-
-    # Export Redis image if available
-    if docker images redis:7-alpine --format "table {{.Repository}}:{{.Tag}}" | grep -q "redis:7-alpine"; then
-        log "Exporting Redis image..."
-        docker save redis:7-alpine > deployment_package/redis-7-alpine.tar
-    else
-        warn "Redis image not found, will need to be pulled in production"
-    fi
-
-    log "Docker images exported successfully"
+    # 拉取ARM64的Redis镜像
+    docker pull --platform linux/arm64 redis:7-alpine
+    docker save redis:7-alpine > deployment_package/redis-7-alpine-arm64.tar
 }
 
 # Function to create deployment package
