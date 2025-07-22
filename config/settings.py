@@ -76,6 +76,11 @@ class Settings(BaseSettings):
     # Logging Configuration
     LOG_LEVEL: str = Field(default="INFO", env="LOG_LEVEL")
     LOG_FILE: str = Field(default="logs/bigdata_platform.log", env="LOG_FILE")
+    # nodes Configuration
+    CLUSTER_NODES_CONFIG_FILE: str = Field(
+        default="config/nodes.json",
+        env="CLUSTER_NODES_CONFIG_FILE"
+    )
 
     # Monitoring Configuration
     METRICS_COLLECTION_INTERVAL: int = Field(
