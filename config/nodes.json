@@ -1,26 +1,371 @@
 {
   "cluster_info": {
     "cluster_name": "production-cluster",
-    "version": "3.3.4"
+    "version": "3.3.4",
+    "description": "首信云数据底座生产集群"
+  },
+  "ssh_defaults": {
+    "port": 22,
+    "username": "bigdata",
+    "timeout": 10,
+    "key_path": "/app/ssh_keys/id_rsa"
   },
   "nodes": [
     {
-      "node_name": "master-01",
-      "ip_address": "192.168.1.100",
-      "role": "NameNode",
+      "node_name": "hadoop101",
+      "ip_address": "192.142.76.242",
+      "hostname": "hadoop101",
+      "role": "NameNode,JobManager,FRONTEND",
+      "cluster_types": ["hadoop", "flink", "doris"],
       "ssh_config": {
         "port": 22,
         "username": "bigdata",
-        "key_path": "/app/ssh_keys/id_rsa"
+        "password": null,
+        "key_path": "/app/ssh_keys/id_rsa",
+        "timeout": 10
+      },
+      "services": [
+        {
+          "name": "hadoop-namenode",
+          "port": 9000,
+          "web_port": 9870,
+          "status_check_url": "http://192.142.76.242:9870/jmx"
+        },
+        {
+          "name": "flink-jobmanager",
+          "port": 6123,
+          "web_port": 8081,
+          "status_check_url": "http://192.142.76.242:8081/overview"
+        },
+        {
+          "name": "doris-frontend",
+          "port": 9030,
+          "web_port": 8060,
+          "status_check_url": "http://192.142.76.242:8060/api/show_frontends"
+        }
+      ],
+      "monitoring": {
+        "enabled": true,
+        "node_exporter_port": 9100
+      },
+      "tags": ["namenode", "jobmanager", "frontend", "master"],
+      "enabled": true
+    },
+    {
+      "node_name": "hadoop102",
+      "ip_address": "192.142.76.243",
+      "hostname": "hadoop102",
+      "role": "NameNode,JobManager,FOLLOWER",
+      "cluster_types": ["hadoop", "flink", "doris"],
+      "ssh_config": {
+        "port": 22,
+        "username": "bigdata",
+        "password": null,
+        "key_path": "/app/ssh_keys/id_rsa",
+        "timeout": 10
       },
       "services": [
         {
           "name": "hadoop-namenode",
           "port": 9000,
           "web_port": 9870
+        },
+        {
+          "name": "flink-jobmanager",
+          "port": 6123,
+          "web_port": 8081
+        },
+        {
+          "name": "doris-follower",
+          "port": 9030,
+          "web_port": 8060
         }
       ],
+      "monitoring": {
+        "enabled": true,
+        "node_exporter_port": 9100
+      },
+      "tags": ["namenode", "jobmanager", "follower", "master"],
+      "enabled": true
+    },
+    {
+      "node_name": "hadoop103",
+      "ip_address": "192.142.76.244",
+      "hostname": "hadoop103",
+      "role": "DataNode,TaskManager,FOLLOWER",
+      "cluster_types": ["hadoop", "flink", "doris"],
+      "ssh_config": {
+        "port": 22,
+        "username": "bigdata",
+        "password": null,
+        "key_path": "/app/ssh_keys/id_rsa",
+        "timeout": 10
+      },
+      "services": [
+        {
+          "name": "hadoop-datanode",
+          "port": 9864,
+          "web_port": 9864
+        },
+        {
+          "name": "flink-taskmanager",
+          "port": 6121,
+          "web_port": 8081
+        },
+        {
+          "name": "doris-follower",
+          "port": 9030,
+          "web_port": 8060
+        }
+      ],
+      "monitoring": {
+        "enabled": true,
+        "node_exporter_port": 9100
+      },
+      "tags": ["datanode", "taskmanager", "follower", "worker"],
+      "enabled": true
+    },
+    {
+      "node_name": "hadoop104",
+      "ip_address": "192.142.76.245",
+      "hostname": "hadoop104",
+      "role": "DataNode,BACKEND",
+      "cluster_types": ["hadoop", "doris"],
+      "ssh_config": {
+        "port": 22,
+        "username": "bigdata",
+        "password": null,
+        "key_path": "/app/ssh_keys/id_rsa",
+        "timeout": 10
+      },
+      "services": [
+        {
+          "name": "hadoop-datanode",
+          "port": 9864,
+          "web_port": 9864
+        },
+        {
+          "name": "doris-backend",
+          "port": 9060,
+          "web_port": 8040
+        }
+      ],
+      "monitoring": {
+        "enabled": true,
+        "node_exporter_port": 9100
+      },
+      "tags": ["datanode", "backend", "worker"],
+      "enabled": true
+    },
+    {
+      "node_name": "hadoop105",
+      "ip_address": "192.142.76.246",
+      "hostname": "hadoop105",
+      "role": "DataNode,BACKEND",
+      "cluster_types": ["hadoop", "doris"],
+      "ssh_config": {
+        "port": 22,
+        "username": "bigdata",
+        "password": null,
+        "key_path": "/app/ssh_keys/id_rsa",
+        "timeout": 10
+      },
+      "services": [
+        {
+          "name": "hadoop-datanode",
+          "port": 9864,
+          "web_port": 9864
+        },
+        {
+          "name": "doris-backend",
+          "port": 9060,
+          "web_port": 8040
+        }
+      ],
+      "monitoring": {
+        "enabled": true,
+        "node_exporter_port": 9100
+      },
+      "tags": ["datanode", "backend", "worker"],
+      "enabled": true
+    },
+    {
+      "node_name": "hadoop106",
+      "ip_address": "192.142.76.247",
+      "hostname": "hadoop106",
+      "role": "DataNode,TaskManager,BACKEND",
+      "cluster_types": ["hadoop", "flink", "doris"],
+      "ssh_config": {
+        "port": 22,
+        "username": "bigdata",
+        "password": null,
+        "key_path": "/app/ssh_keys/id_rsa",
+        "timeout": 10
+      },
+      "services": [
+        {
+          "name": "hadoop-datanode",
+          "port": 9864,
+          "web_port": 9864
+        },
+        {
+          "name": "flink-taskmanager",
+          "port": 6121,
+          "web_port": 8081
+        },
+        {
+          "name": "doris-backend",
+          "port": 9060,
+          "web_port": 8040
+        }
+      ],
+      "monitoring": {
+        "enabled": true,
+        "node_exporter_port": 9100
+      },
+      "tags": ["datanode", "taskmanager", "backend", "worker"],
+      "enabled": true
+    },
+    {
+      "node_name": "hadoop107",
+      "ip_address": "192.142.76.248",
+      "hostname": "hadoop107",
+      "role": "DataNode,TaskManager,BACKEND",
+      "cluster_types": ["hadoop", "flink", "doris"],
+      "ssh_config": {
+        "port": 22,
+        "username": "bigdata",
+        "password": null,
+        "key_path": "/app/ssh_keys/id_rsa",
+        "timeout": 10
+      },
+      "services": [
+        {
+          "name": "hadoop-datanode",
+          "port": 9864,
+          "web_port": 9864
+        },
+        {
+          "name": "flink-taskmanager",
+          "port": 6121,
+          "web_port": 8081
+        },
+        {
+          "name": "doris-backend",
+          "port": 9060,
+          "web_port": 8040
+        }
+      ],
+      "monitoring": {
+        "enabled": true,
+        "node_exporter_port": 9100
+      },
+      "tags": ["datanode", "taskmanager", "backend", "worker"],
+      "enabled": true
+    },
+    {
+      "node_name": "hadoop108",
+      "ip_address": "192.142.76.249",
+      "hostname": "hadoop108",
+      "role": "JournalNode,BACKEND",
+      "cluster_types": ["hadoop", "doris"],
+      "ssh_config": {
+        "port": 22,
+        "username": "bigdata",
+        "password": null,
+        "key_path": "/app/ssh_keys/id_rsa",
+        "timeout": 10
+      },
+      "services": [
+        {
+          "name": "hadoop-journalnode",
+          "port": 8485,
+          "web_port": 8480
+        },
+        {
+          "name": "doris-backend",
+          "port": 9060,
+          "web_port": 8040
+        }
+      ],
+      "monitoring": {
+        "enabled": true,
+        "node_exporter_port": 9100
+      },
+      "tags": ["journalnode", "backend"],
+      "enabled": true
+    },
+    {
+      "node_name": "hadoop109",
+      "ip_address": "192.142.76.250",
+      "hostname": "hadoop109",
+      "role": "JournalNode,BACKEND",
+      "cluster_types": ["hadoop", "doris"],
+      "ssh_config": {
+        "port": 22,
+        "username": "bigdata",
+        "password": null,
+        "key_path": "/app/ssh_keys/id_rsa",
+        "timeout": 10
+      },
+      "services": [
+        {
+          "name": "hadoop-journalnode",
+          "port": 8485,
+          "web_port": 8480
+        },
+        {
+          "name": "doris-backend",
+          "port": 9060,
+          "web_port": 8040
+        }
+      ],
+      "monitoring": {
+        "enabled": true,
+        "node_exporter_port": 9100
+      },
+      "tags": ["journalnode", "backend"],
+      "enabled": true
+    },
+    {
+      "node_name": "hadoop110",
+      "ip_address": "192.142.76.251",
+      "hostname": "hadoop110",
+      "role": "JournalNode,BACKEND",
+      "cluster_types": ["hadoop", "doris"],
+      "ssh_config": {
+        "port": 22,
+        "username": "bigdata",
+        "password": null,
+        "key_path": "/app/ssh_keys/id_rsa",
+        "timeout": 10
+      },
+      "services": [
+        {
+          "name": "hadoop-journalnode",
+          "port": 8485,
+          "web_port": 8480
+        },
+        {
+          "name": "doris-backend",
+          "port": 9060,
+          "web_port": 8040
+        }
+      ],
+      "monitoring": {
+        "enabled": true,
+        "node_exporter_port": 9100
+      },
+      "tags": ["journalnode", "backend"],
       "enabled": true
     }
-  ]
+  ],
+  "monitoring_settings": {
+    "collection_interval": 30,
+    "cache_ttl": 30,
+    "ssh_timeout": 5,
+    "max_concurrent_connections": 5,
+    "retry_attempts": 3,
+    "retry_delay": 2
+  }
 }
