@@ -1,312 +1,375 @@
 """
-大数据平台的应用程序配置设置。 该模块包含应用程序的所有配置变量和环境特定设置，包括数据库、Hadoop和服务配置。
+Cross-platform production startup script for the Big Data Platform.
+
+This script handles production deployment with proper configuration,
+logging setup, and environment validation across Windows and Linux.
 """
 
 import os
+import sys
+import time
+import asyncio
 import platform
-import pathlib
-import json
-from typing import Optional, Dict, Any, List
-from pydantic import Field
-from pydantic_settings import BaseSettings
+from datetime import datetime
+from pathlib import Path
+from typing import Dict, Any
+
+# Add project root to Python path
+project_root = Path(__file__).parent
+sys.path.insert(0, str(project_root))
+
+from loguru import logger
+from config.settings import settings
 
 
-class Settings(BaseSettings):
-    """
-    Application configuration settings.
+def setup_production_logging():
+    """Setup cross-platform production logging configuration."""
 
-    Loads configuration from environment variables with fallback defaults.
-    Supports different modes for local development and production environments.
-    """
+    # Remove default logger
+    logger.remove()
 
-    # Application Basic Configuration
-    APP_NAME: str = "首信云数据底座"
-    VERSION: str = "3.2.1"
-    DEBUG: bool = Field(default=False, env="DEBUG")
-    HOST: str = Field(default="0.0.0.0", env="HOST")
-    PORT: int = Field(default=8000, env="PORT")
-
-    # Environment Detection
-    IS_WINDOWS: bool = platform.system() == "Windows"
-    IS_LOCAL_DEV: bool = Field(default=True, env="IS_LOCAL_DEV")
-    MOCK_DATA_MODE: bool = Field(default=True, env="MOCK_DATA_MODE")
-
-    # 数据集成配置
-    DATA_INTEGRATION_ENABLED: bool = Field(default=True, env="DATA_INTEGRATION_ENABLED")
-    MAX_QUERY_RESULTS: int = Field(default=1000, env="MAX_QUERY_RESULTS")
-    CONNECTION_TIMEOUT: int = Field(default=30, env="CONNECTION_TIMEOUT")
-    DEFAULT_POOL_SIZE: int = Field(default=10, env="DEFAULT_POOL_SIZE")
-
-    # Database Configuration
-    DATABASE_URL: str = Field(
-        default="sqlite:///./bigdata_platform.db",
-        env="DATABASE_URL"
+    # Add console logger with appropriate level
+    logger.add(
+        sys.stdout,
+        level=settings.LOG_LEVEL,
+        format="<green>{time:YYYY-MM-DD HH:mm:ss}</green> | "
+               "<level>{level: <8}</level> | "
+               "<cyan>{name}</cyan>:<cyan>{function}</cyan>:<cyan>{line}</cyan> | "
+               "<level>{message}</level>",
+        colorize=True
     )
 
-    # Hadoop Configuration (Cross-platform paths)
-    HADOOP_HOME: Optional[str] = Field(default=None, env="HADOOP_HOME")
-    HADOOP_CONF_DIR: Optional[str] = Field(default=None, env="HADOOP_CONF_DIR")
+    # Add file logger with cross-platform path
+    log_file = Path(settings.get_resolved_log_file())
+    log_file.parent.mkdir(parents=True, exist_ok=True)
 
-    # HDFS Configuration
-    HDFS_NAMENODE: str = Field(default="hdfs://hadoop101:8020", env="HDFS_NAMENODE")
-    HDFS_USER: str = Field(default="bigdata", env="HDFS_USER")
-
-    # Hive Configuration
-    HIVE_SERVER_HOST: str = Field(default="hadoop101", env="HIVE_SERVER_HOST")
-    HIVE_SERVER_PORT: int = Field(default=10000, env="HIVE_SERVER_PORT")
-    HIVE_DATABASE: str = Field(default="default", env="HIVE_DATABASE")
-    HIVE_USERNAME: str = Field(default="bigdata", env="HIVE_USERNAME")
-    HIVE_PASSWORD: str = Field(default="gqdw8862", env="HIVE_PASSWORD")
-
-    # Flink Configuration
-    FLINK_JOBMANAGER_HOST: str = Field(default="hadoop101", env="FLINK_JOBMANAGER_HOST")
-    FLINK_JOBMANAGER_PORT: int = Field(default=8081, env="FLINK_JOBMANAGER_PORT")
-
-    # Doris Configuration
-    DORIS_FE_HOST: str = Field(default="hadoop101", env="DORIS_FE_HOST")
-    DORIS_FE_PORT: int = Field(default=8060, env="DORIS_FE_PORT")
-    DORIS_USERNAME: str = Field(default="root", env="DORIS_USERNAME")
-    DORIS_PASSWORD: str = Field(default="1qaz@WSX3edc", env="DORIS_PASSWORD")
-
-    # Redis Configuration
-    REDIS_URL: str = Field(default="redis://hadoop101:6379/0", env="REDIS_URL")
-
-    # Cache Configuration
-    CACHE_TTL: int = Field(default=300, env="CACHE_TTL")  # 5 minutes
-
-    # Logging Configuration (Cross-platform paths)
-    LOG_LEVEL: str = Field(default="INFO", env="LOG_LEVEL")
-    LOG_FILE: str = Field(default="logs/bigdata_platform.log", env="LOG_FILE")
-
-    # Monitoring Configuration
-    METRICS_COLLECTION_INTERVAL: int = Field(
-        default=60,
-        env="METRICS_COLLECTION_INTERVAL"
-    )  # seconds
-    METRICS_CACHE_TTL: int = Field(default=30, env="METRICS_CACHE_TTL")  # seconds
-    METRICS_SSH_TIMEOUT: int = Field(default=5, env="METRICS_SSH_TIMEOUT")  # seconds
-    METRICS_MAX_CONCURRENT: int = Field(default=5, env="METRICS_MAX_CONCURRENT")
-    METRICS_ENABLE_CACHE: bool = Field(default=True, env="METRICS_ENABLE_CACHE")
-
-    # Node Configuration Settings
-    CLUSTER_NODES_CONFIG_FILE: str = Field(
-        default="config/nodes.json",
-        env="CLUSTER_NODES_CONFIG_FILE"
-    )
-    CLUSTER_NODES_CONFIG_JSON: Optional[str] = Field(
-        default=None,
-        env="CLUSTER_NODES_CONFIG_JSON"
+    logger.add(
+        str(log_file),
+        level=settings.LOG_LEVEL,
+        format="{time:YYYY-MM-DD HH:mm:ss} | {level: <8} | {name}:{function}:{line} | {message}",
+        rotation="10 MB",
+        retention="30 days",
+        compression="gz",
+        encoding="utf-8"
     )
 
-    # SSH Configuration for cluster access
-    SSH_KEY_PATH: str = Field(
-        default="/app/ssh_keys/id_rsa" if not platform.system() == "Windows" else "ssh_keys/id_rsa",
-        env="SSH_KEY_PATH"
-    )
-    SSH_USERNAME: str = Field(default="bigdata", env="SSH_USERNAME")
-    SSH_PASSWORD: Optional[str] = Field(default=None, env="SSH_PASSWORD")
-    SSH_PORT: int = Field(default=22, env="SSH_PORT")
-    SSH_TIMEOUT: int = Field(default=10, env="SSH_TIMEOUT")
+    logger.info("✅ Cross-platform production logging configured")
+    logger.info(f"📁 Log file: {log_file}")
 
-    # Security Configuration
-    SECRET_KEY: str = Field(default="your-secret-key-here", env="SECRET_KEY")
 
-    # File Upload Configuration (Cross-platform paths)
-    UPLOAD_DIR: str = Field(
-        default="uploads" if not platform.system() == "Windows" else "uploads",
-        env="UPLOAD_DIR"
-    )
-    MAX_UPLOAD_SIZE: int = Field(default=50 * 1024 * 1024, env="MAX_UPLOAD_SIZE")  # 50MB
+def validate_environment():
+    """Validate the production environment across platforms."""
 
-    # Environment-specific Properties
-    @property
-    def use_real_clusters(self) -> bool:
-        """
-        Determine whether to use real cluster connections.
+    logger.info("🔍 Validating production environment...")
+    logger.info(f"🖥️ Platform: {platform.system()} {platform.release()}")
+    logger.info(f"🐍 Python: {sys.version}")
+    logger.info(f"🔧 IS_LOCAL_DEV: {settings.IS_LOCAL_DEV}")
+    logger.info(f"🔧 MOCK_DATA_MODE: {settings.MOCK_DATA_MODE}")
+    logger.info(f"🔧 use_real_clusters: {settings.use_real_clusters}")
 
-        Returns:
-            bool: True if should connect to real clusters, False for mock mode.
-        """
-        return not self.IS_LOCAL_DEV and not self.MOCK_DATA_MODE
+    # Check if running in Docker
+    in_docker = os.path.exists('/.dockerenv') or os.environ.get('DOCKER_CONTAINER') == 'true'
+    if in_docker:
+        logger.info("🐳 Running in Docker container")
 
-    @property
-    def hadoop_available(self) -> bool:
-        """
-        Check if Hadoop is available in the current environment.
+    # Check required configuration values only if using real clusters
+    if settings.use_real_clusters:
+        logger.info("🔍 Validating real cluster configuration...")
 
-        Returns:
-            bool: True if Hadoop is properly configured and available.
-        """
-        if self.IS_WINDOWS or self.IS_LOCAL_DEV:
-            return False
-        return (
-                self.HADOOP_HOME is not None and
-                os.path.exists(self.HADOOP_HOME or "")
-        )
-
-    @property
-    def cluster_nodes_config(self) -> Dict[str, Any]:
-        """
-        Load cluster nodes configuration from various sources.
-
-        Priority: 1. Environment JSON 2. Config file 3. Default config
-
-        Returns:
-            Dict[str, Any]: Cluster nodes configuration
-        """
-        # Try environment variable first (for Docker deployments)
-        if self.CLUSTER_NODES_CONFIG_JSON:
-            try:
-                return json.loads(self.CLUSTER_NODES_CONFIG_JSON)
-            except json.JSONDecodeError as e:
-                print(f"Warning: Invalid JSON in CLUSTER_NODES_CONFIG_JSON: {e}")
-
-        # Try config file
-        config_file_path = self._resolve_path(self.CLUSTER_NODES_CONFIG_FILE)
-        if os.path.exists(config_file_path):
-            try:
-                with open(config_file_path, 'r', encoding='utf-8') as f:
-                    return json.load(f)
-            except (json.JSONDecodeError, IOError) as e:
-                print(f"Warning: Failed to load nodes config from {config_file_path}: {e}")
-
-        # Return default empty configuration
-        return self._get_default_nodes_config()
-
-    def _resolve_path(self, path: str) -> str:
-        """
-        Resolve path to be cross-platform compatible.
-
-        Args:
-            path: Path string
-
-        Returns:
-            str: Resolved absolute path
-        """
-        if os.path.isabs(path):
-            return path
-
-        # For relative paths, resolve from project root
-        project_root = pathlib.Path(__file__).parent.parent
-        return str(project_root / path)
-
-    def _get_default_nodes_config(self) -> Dict[str, Any]:
-        """
-        Get default nodes configuration for environments without config files.
-
-        Returns:
-            Dict[str, Any]: Default configuration
-        """
-        return {
-            "cluster_info": {
-                "cluster_name": "default-cluster",
-                "version": "3.3.4",
-                "description": "默认集群配置"
-            },
-            "ssh_defaults": {
-                "port": 22,
-                "username": "bigdata",
-                "timeout": 10,
-                "key_path": self.SSH_KEY_PATH
-            },
-            "nodes": [],
-            "monitoring_settings": {
-                "collection_interval": 30,
-                "cache_ttl": 30,
-                "ssh_timeout": 5,
-                "max_concurrent_connections": 5,
-                "retry_attempts": 3,
-                "retry_delay": 2
-            }
+        # Check configuration values from settings (already loaded from .env)
+        required_configs = {
+            'HDFS_NAMENODE': settings.HDFS_NAMENODE,
+            'HDFS_USER': settings.HDFS_USER,
+            'HIVE_SERVER_HOST': settings.HIVE_SERVER_HOST,
+            'HIVE_USERNAME': settings.HIVE_USERNAME
         }
 
-    def get_resolved_log_file(self) -> str:
-        """Get resolved log file path."""
-        return self._resolve_path(self.LOG_FILE)
+        missing_configs = []
+        for config_name, config_value in required_configs.items():
+            if not config_value:
+                missing_configs.append(config_name)
+            else:
+                logger.info(f"✅ {config_name}: {config_value}")
 
-    def get_resolved_upload_dir(self) -> str:
-        """Get resolved upload directory path."""
-        return self._resolve_path(self.UPLOAD_DIR)
+        if missing_configs:
+            logger.error(f"❌ Missing required configuration values: {missing_configs}")
+            logger.info("💡 Make sure your .env file contains all required values")
+            sys.exit(1)
 
-    def get_resolved_ssh_key_path(self) -> str:
-        """Get resolved SSH key path."""
-        return self._resolve_path(self.SSH_KEY_PATH)
+        # Validate Hadoop directory exists (if specified and not in Docker)
+        if settings.HADOOP_HOME and not in_docker:
+            hadoop_home = Path(settings.HADOOP_HOME)
+            if not hadoop_home.exists():
+                logger.warning(f"⚠️ HADOOP_HOME directory not found: {hadoop_home}")
+                logger.info("💡 This might be OK if running in a different environment")
+            else:
+                logger.info(f"✅ HADOOP_HOME found: {hadoop_home}")
 
-    class Config:
-        """Pydantic configuration for Settings class."""
-        env_file = ".env"
-        env_file_encoding = 'utf-8'
-        env_ignore_empty = True
-        extra = "ignore"  # Ignore extra environment variables
+        # Validate SSH key for cluster access
+        ssh_key_path = settings.get_resolved_ssh_key_path()
+        if ssh_key_path and os.path.exists(ssh_key_path):
+            logger.info(f"✅ SSH key found: {ssh_key_path}")
 
+            # Check permissions on Unix-like systems
+            if platform.system() != "Windows":
+                import stat
+                file_stat = os.stat(ssh_key_path)
+                if stat.filemode(file_stat.st_mode) != '-rw-------':
+                    logger.warning(f"⚠️ SSH key permissions may be too open: {ssh_key_path}")
+                    logger.info("💡 Consider running: chmod 600 {ssh_key_path}")
+        else:
+            logger.warning(f"⚠️ SSH key not found: {ssh_key_path}")
+            logger.info("💡 Cluster monitoring may not work without SSH access")
 
-def create_settings() -> Settings:
-    """
-    Create and configure the settings instance.
+        # Validate nodes configuration
+        nodes_config = settings.cluster_nodes_config
+        nodes_count = len(nodes_config.get('nodes', []))
+        if nodes_count > 0:
+            logger.info(f"✅ Cluster nodes configured: {nodes_count}")
 
-    Returns:
-        Settings: Configured settings instance.
-    """
-    settings_instance = Settings()
+            # Show summary by cluster type
+            cluster_summary = {}
+            for node in nodes_config.get('nodes', []):
+                for cluster_type in node.get('cluster_types', ['unknown']):
+                    cluster_summary[cluster_type] = cluster_summary.get(cluster_type, 0) + 1
 
-    # Ensure required directories exist
-    _ensure_directories_exist(settings_instance)
+            for cluster_type, count in cluster_summary.items():
+                logger.info(f"   - {cluster_type}: {count} nodes")
+        else:
+            logger.warning("⚠️ No cluster nodes configured")
+            logger.info("💡 Add node configuration to config/nodes.json")
 
-    # Output environment information in debug mode
-    if settings_instance.DEBUG:
-        _print_environment_info(settings_instance)
+    else:
+        logger.info("ℹ️ Using mock data mode - skipping cluster environment validation")
 
-    return settings_instance
-
-
-def _ensure_directories_exist(settings_instance: Settings) -> None:
-    """Ensure required directories exist."""
-    directories_to_create = [
-        settings_instance.get_resolved_log_file(),
-        settings_instance.get_resolved_upload_dir(),
+    # Check required directories
+    required_dirs = [
+        settings.get_resolved_log_file(),
+        settings.get_resolved_upload_dir(),
     ]
 
-    for path in directories_to_create:
-        if path.endswith('.log'):
-            # For log files, create parent directory
-            directory = pathlib.Path(path).parent
+    for dir_path in required_dirs:
+        if str(dir_path).endswith('.log'):
+            # For log files, check parent directory
+            directory = Path(dir_path).parent
         else:
-            # For other paths, treat as directory
-            directory = pathlib.Path(path)
+            directory = Path(dir_path)
 
         try:
             directory.mkdir(parents=True, exist_ok=True)
+            logger.info(f"✅ Directory ready: {directory}")
         except Exception as e:
-            print(f"Warning: Could not create directory {directory}: {e}")
+            logger.error(f"❌ Cannot create directory {directory}: {e}")
+            sys.exit(1)
 
-    # Create SSH keys directory if specified
-    ssh_key_path = settings_instance.get_resolved_ssh_key_path()
-    if ssh_key_path:
-        ssh_key_dir = pathlib.Path(ssh_key_path).parent
+    logger.info("✅ Environment validation passed")
+
+
+async def test_dependencies():
+    """Test critical dependencies and connections."""
+
+    logger.info("🔍 Testing critical dependencies...")
+
+    # Test database connection
+    try:
+        from app.utils.database import get_db
+
+        # Test database connection
+        db = next(get_db())
+        db.close()
+        logger.info("✅ Database connection test passed")
+    except Exception as e:
+        logger.warning(f"⚠️ Database connection test failed: {e}")
+
+    # Test Redis connection if configured
+    if not settings.IS_LOCAL_DEV:
         try:
-            ssh_key_dir.mkdir(parents=True, exist_ok=True)
+            from app.utils.cache_service import cache_service
+            await cache_service.initialize()
+
+            if await cache_service.health_check():
+                logger.info("✅ Redis connection test passed")
+            else:
+                logger.warning("⚠️ Redis connection test failed")
         except Exception as e:
-            print(f"Warning: Could not create SSH key directory {ssh_key_dir}: {e}")
+            logger.warning(f"⚠️ Redis connection test failed: {e}")
+
+    # Test cluster connections only if enabled
+    if settings.use_real_clusters:
+        logger.info("🔍 Testing cluster connections...")
+
+        try:
+            from app.utils.hadoop_client import HDFSClient, HiveClient
+            from app.utils.metrics_collector import metrics_collector
+
+            # Test HDFS
+            try:
+                hdfs_client = HDFSClient()
+                storage_info = hdfs_client.get_storage_info()
+                if storage_info.get('total_size', 0) > 0:
+                    logger.info("✅ HDFS connection test passed")
+                else:
+                    logger.warning("⚠️ HDFS connection test failed - no storage info")
+            except Exception as e:
+                logger.warning(f"⚠️ HDFS connection test failed: {e}")
+
+            # Test Hive
+            try:
+                hive_client = HiveClient()
+                databases = hive_client.get_databases()
+                if databases:
+                    logger.info(f"✅ Hive connection test passed ({len(databases)} databases)")
+                else:
+                    logger.warning("⚠️ Hive connection test failed - no databases returned")
+            except Exception as e:
+                logger.warning(f"⚠️ Hive connection test failed: {e}")
+
+            # Test metrics collector
+            try:
+                cluster_metrics = await metrics_collector.get_cluster_metrics('hadoop')
+                if cluster_metrics:
+                    active_nodes = cluster_metrics.get('active_nodes', 0)
+                    total_nodes = cluster_metrics.get('total_nodes', 0)
+                    logger.info(f"✅ Metrics collector test passed ({active_nodes}/{total_nodes} nodes)")
+                else:
+                    logger.warning("⚠️ Metrics collector test failed - no metrics returned")
+            except Exception as e:
+                logger.warning(f"⚠️ Metrics collector test failed: {e}")
+
+        except ImportError as e:
+            logger.warning(f"⚠️ Cluster modules not available: {e}")
+        except Exception as e:
+            logger.warning(f"⚠️ Cluster connection tests failed: {e}")
+
+    else:
+        logger.info("ℹ️ Mock data mode - skipping cluster connection tests")
+
+    logger.info("✅ Dependency testing completed")
 
 
-def _print_environment_info(settings_instance: Settings) -> None:
-    """Print environment information for debugging."""
-    env_type = "Windows本地开发" if settings_instance.IS_WINDOWS else "Linux服务器"
-    data_mode = "模拟数据" if settings_instance.MOCK_DATA_MODE else "真实数据"
-    cluster_status = "禁用" if not settings_instance.use_real_clusters else "启用"
+def print_startup_banner():
+    """Print startup banner with system information."""
 
-    print(f"🔧 运行环境: {env_type}")
-    print(f"📊 数据模式: {data_mode}")
-    print(f"🖥️ 集群连接: {cluster_status}")
-    print(f"📁 日志文件: {settings_instance.get_resolved_log_file()}")
-    print(f"📁 上传目录: {settings_instance.get_resolved_upload_dir()}")
-    print(f"🔑 SSH密钥: {settings_instance.get_resolved_ssh_key_path()}")
+    # Get system information
+    system_info = {
+        'platform': platform.system(),
+        'release': platform.release(),
+        'machine': platform.machine(),
+        'python': sys.version.split()[0],
+        'working_dir': os.getcwd(),
+    }
 
-    # Print nodes configuration summary
-    nodes_config = settings_instance.cluster_nodes_config
-    nodes_count = len(nodes_config.get('nodes', []))
-    print(f"🖥️ 配置节点数: {nodes_count}")
+    # Check if running in Docker
+    in_docker = os.path.exists('/.dockerenv') or os.environ.get('DOCKER_CONTAINER') == 'true'
+    container_info = " (Docker)" if in_docker else ""
+
+    banner = f"""
+╔══════════════════════════════════════════════════════════════════════════════╗
+║                            {settings.APP_NAME}                               ║
+║                                Version {settings.VERSION}                                    ║
+╠══════════════════════════════════════════════════════════════════════════════╣
+║ Environment: {'Production' if not settings.DEBUG else 'Development'}{container_info:<20} ║
+║ Platform: {system_info['platform']} {system_info['release']} ({system_info['machine']})                     ║
+║ Python: {system_info['python']} on {system_info['platform']:<50} ║
+║ Host: {settings.HOST}:{settings.PORT}                                                ║
+║ Data Mode: {'Real Clusters' if settings.use_real_clusters else 'Mock Data':<15}                        ║
+║ Working Dir: {system_info['working_dir']:<56} ║
+╚══════════════════════════════════════════════════════════════════════════════╝
+"""
+
+    print(banner)
 
 
-# Create global settings instance
-settings = create_settings()
+def check_python_version():
+    """Check if Python version is compatible."""
+    if sys.version_info < (3, 8):
+        logger.error("❌ Python 3.8 or higher is required")
+        sys.exit(1)
+    logger.info(f"✅ Python version check passed: {sys.version}")
+
+
+async def initialize_cache():
+    """Initialize cache service if not in local development mode."""
+    if not settings.IS_LOCAL_DEV:
+        try:
+            from app.utils.cache_service import cache_service
+            await cache_service.initialize()
+            logger.info("✅ Cache service initialized")
+        except Exception as e:
+            logger.warning(f"⚠️ Cache service initialization failed: {e}")
+
+
+async def main():
+    """Main startup function."""
+
+    print_startup_banner()
+
+    # Check Python version
+    check_python_version()
+
+    # Setup logging
+    setup_production_logging()
+
+    # Validate environment
+    validate_environment()
+
+    # Initialize cache
+    await initialize_cache()
+
+    # Test dependencies
+    await test_dependencies()
+
+    logger.info("🎉 Startup validation completed successfully!")
+    logger.info(f"🚀 Starting server on {settings.HOST}:{settings.PORT}")
+
+    # Import and run the server
+    import uvicorn
+    from app.main import app
+
+    # Determine number of workers based on environment
+    if settings.DEBUG or settings.IS_LOCAL_DEV:
+        workers = 1
+    else:
+        # In production, use multiple workers but limit based on CPU count
+        import multiprocessing
+        cpu_count = multiprocessing.cpu_count()
+        workers = min(4, max(1, cpu_count))
+
+    logger.info(f"🔧 Using {workers} worker{'s' if workers > 1 else ''}")
+
+    # Production server configuration
+    config = uvicorn.Config(
+        app=app,
+        host=settings.HOST,
+        port=settings.PORT,
+        log_level=settings.LOG_LEVEL.lower(),
+        access_log=False,  # We handle logging ourselves
+        server_header=False,
+        date_header=False,
+        reload=False,  # Never reload in production
+        workers=workers,
+    )
+
+    server = uvicorn.Server(config)
+
+    try:
+        await server.serve()
+    except KeyboardInterrupt:
+        logger.info("👋 Server shutdown by user")
+    except Exception as e:
+        logger.error(f"❌ Server error: {e}")
+        raise
+
+
+if __name__ == "__main__":
+    try:
+        if platform.system() == "Windows":
+            # On Windows, use ProactorEventLoop for better compatibility
+            asyncio.set_event_loop_policy(asyncio.WindowsProactorEventLoopPolicy())
+
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        logger.info("👋 Server shutdown by user")
+    except Exception as e:
+        logger.error(f"❌ Server startup failed: {e}")
+        sys.exit(1)

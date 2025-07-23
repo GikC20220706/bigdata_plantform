@@ -14,13 +14,13 @@ from app.schemas.overview import (
     DataQualityMetrics, OverviewResponse, StorageInfo, SystemHealth,
     TaskListResponse, TaskSearchParams, TaskStatus
 )
-from app.services.optimized_overview_service import OptimizedOverviewService
+from app.services.enhanced_overview_service import EnhancedOverviewService
 from app.utils.hadoop_client import HDFSClient, HiveClient
 from app.utils.metrics_collector import metrics_collector
 from app.utils.response import create_response
 
 router = APIRouter()
-overview_service = OptimizedOverviewService()
+overview_service = EnhancedOverviewService()
 
 
 @router.get("/", response_model=OverviewResponse, summary="获取数据总览")
