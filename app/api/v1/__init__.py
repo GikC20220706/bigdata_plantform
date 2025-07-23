@@ -13,11 +13,10 @@ This package contains all API endpoint modules organized by functional area.
 from fastapi import APIRouter
 
 # Import all routers
-from .overview import router as overview_router
+from .optimized_overview import router as overview_router
 from .cluster import router as cluster_router
 from .development import router as development_router
 from .governance import router as governance_router
-from .integration import router as ingestion_router
 from .sync import router as sync_router
 from .integration import router as integration_router  # 新增数据集成路由
 

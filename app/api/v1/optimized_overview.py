@@ -845,24 +845,3 @@ async def periodic_cache_optimization():
 
     except Exception as e:
         logger.error(f"Periodic cache optimization failed: {e}")
-
-
-# Middleware to track API performance
-@router.middleware("http")
-async def track_performance_middleware(request, call_next):
-    """Middleware to track API performance and cache metrics."""
-    start_time = time.time()
-
-    response = await call_next(request)
-
-    process_time = time.time() - start_time
-
-    # Log slow requests
-    if process_time > 1.0:
-        logger.warning(f"Slow request: {request.url.path} took {process_time * 1000:.1f}ms")
-
-    # Add performance headers
-    response.headers["X-Process-Time"] = str(round(process_time * 1000, 1))
-    response.headers["X-Cache-Version"] = "enhanced_v2"
-
-    return response

@@ -276,6 +276,69 @@ def setup_exception_handlers(app: FastAPI) -> None:
             ).dict()
         )
 
+# 在 app/main.py 的 setup_middleware 函数中添加性能监控中间件
+
+def setup_middleware(app: FastAPI) -> None:
+    """Setup middleware for the FastAPI application."""
+
+    # CORS middleware
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=["*"] if settings.DEBUG else [
+            "http://localhost:3000",
+            "http://localhost:8080",
+            "https://yourdomain.com"
+        ],
+        allow_credentials=True,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
+
+    # Gzip compression middleware
+    app.add_middleware(GZipMiddleware, minimum_size=1000)
+
+    # Add request logging middleware
+    @app.middleware("http")
+    async def log_requests(request: Request, call_next):
+        """Log all HTTP requests with performance tracking."""
+        start_time = time.time()
+
+        # Skip logging for health checks and static files
+        if request.url.path in ["/health", "/favicon.ico"] or request.url.path.startswith("/static"):
+            response = await call_next(request)
+            return response
+
+        logger.info(f"📥 {request.method} {request.url.path} - Client: {request.client.host}")
+
+        try:
+            response = await call_next(request)
+            process_time = time.time() - start_time
+
+            # Log slow requests
+            if process_time > 1.0:
+                logger.warning(f"Slow request: {request.url.path} took {process_time * 1000:.1f}ms")
+
+            logger.info(
+                f"📤 {request.method} {request.url.path} - "
+                f"Status: {response.status_code} - "
+                f"Time: {process_time:.3f}s"
+            )
+
+            # Add response time headers
+            response.headers["X-Process-Time"] = str(round(process_time * 1000, 1))
+            if "/api/v1/overview" in request.url.path:
+                response.headers["X-Cache-Version"] = "enhanced_v2"
+
+            return response
+
+        except Exception as e:
+            process_time = time.time() - start_time
+            logger.error(
+                f"❌ {request.method} {request.url.path} - "
+                f"Error: {str(e)} - "
+                f"Time: {process_time:.3f}s"
+            )
+            raise
 
 # Create the FastAPI app instance
 app = create_app()
