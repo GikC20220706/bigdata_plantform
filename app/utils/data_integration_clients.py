@@ -19,7 +19,6 @@ import pymysql
 from sqlalchemy import create_engine, text, MetaData, inspect
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
 from sqlalchemy.orm import sessionmaker
-import cx_Oracle
 import ksycopg2
 from loguru import logger
 from pathlib import Path
