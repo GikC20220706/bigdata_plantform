@@ -15,7 +15,7 @@ from datetime import datetime
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Dict, Any
-
+from app.api.v1 import api_router
 from fastapi import FastAPI, Request, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
@@ -118,9 +118,9 @@ def create_app() -> FastAPI:
         title=settings.APP_NAME,
         version=settings.VERSION,
         description="大数据平台API - 提供集群监控、数据治理、任务管理等功能",
-        docs_url="/docs" if settings.DEBUG else None,
-        redoc_url="/redoc" if settings.DEBUG else None,
-        openapi_url="/openapi.json" if settings.DEBUG else None,
+        docs_url="/docs",
+        redoc_url="/redoc" ,
+        openapi_url="/openapi.json",
         lifespan=lifespan
     )
 
