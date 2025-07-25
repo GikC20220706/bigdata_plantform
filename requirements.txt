@@ -99,3 +99,8 @@ pytest-asyncio==0.21.1
 
 # Production optimizations
 orjson==3.9.10
+
+# Add mysql dependcencs
+aiomysql>=0.1.1
+PyMySQL>=1.0.2
+cryptography>=3.4.8

@@ -37,11 +37,28 @@ class Settings(BaseSettings):
     CONNECTION_TIMEOUT: int = Field(default=30, env="CONNECTION_TIMEOUT")
     DEFAULT_POOL_SIZE: int = Field(default=10, env="DEFAULT_POOL_SIZE")
 
-    # Database Configuration
+    # Database Configuration - 修改默认值为MySQL
     DATABASE_URL: str = Field(
-        default="sqlite:///./bigdata_platform.db",
+        default="mysql+aiomysql://root:1qaz@WSX3edc@hadoop101:3306/bigdata_platform?charset=utf8mb4",
         env="DATABASE_URL"
     )
+
+    # 新增数据库连接池配置
+    DATABASE_POOL_SIZE: int = Field(default=20, env="DATABASE_POOL_SIZE")
+    DATABASE_POOL_RECYCLE: int = Field(default=3600, env="DATABASE_POOL_RECYCLE")
+    DATABASE_POOL_PRE_PING: bool = Field(default=True, env="DATABASE_POOL_PRE_PING")
+    DATABASE_ECHO: bool = Field(default=False, env="DATABASE_ECHO")  # SQL日志
+
+    # 数据库类型检测
+    @property
+    def is_mysql(self) -> bool:
+        """检查是否使用MySQL数据库"""
+        return "mysql" in self.DATABASE_URL.lower()
+
+    @property
+    def is_sqlite(self) -> bool:
+        """检查是否使用SQLite数据库"""
+        return "sqlite" in self.DATABASE_URL.lower()
 
     # Hadoop Configuration (Cross-platform paths)
     HADOOP_HOME: Optional[str] = Field(default=None, env="HADOOP_HOME")

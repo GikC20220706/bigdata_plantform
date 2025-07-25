@@ -7,7 +7,7 @@ Main FastAPI application for the Big Data Platform.
 This is the core application module that sets up FastAPI with all necessary
 middleware, routers, and configuration for production deployment.
 """
-
+import asyncio
 import os
 import sys
 import time
@@ -49,11 +49,34 @@ async def lifespan(app: FastAPI):
 
     # Initialize database if needed
     try:
-        from app.utils.database import create_tables
-        create_tables()
-        logger.info("✅ Database tables initialized")
+        from app.utils.database import create_tables, test_connection
+        if test_connection():
+            create_tables()
+            logger.info("✅ MySQL database initialized")
+        else:
+            logger.warning("⚠️ Database connection test failed")
     except Exception as e:
-        logger.warning(f"⚠️ Database initialization skipped: {e}")
+        logger.warning(f"⚠️ Database initialization failed: {e}")
+
+        # 初始化数据集成缓存
+    try:
+        from app.utils.integration_cache import integration_cache
+        logger.info("✅ Integration cache manager initialized")
+        logger.info(f"📊 Cache levels: Memory(60s) → Redis(5m) → DB(1h)")
+    except Exception as e:
+        logger.warning(f"⚠️ Integration cache initialization failed: {e}")
+
+        # 初始化优化的数据集成服务
+    try:
+        from app.services.optimized_data_integration_service import optimized_data_integration_service
+        logger.info("✅ Optimized data integration service initialized")
+
+        # 预热关键缓存（后台执行）
+        import asyncio
+        asyncio.create_task(warm_critical_cache())
+
+    except Exception as e:
+        logger.warning(f"⚠️ Data integration service initialization failed: {e}")
 
     # Initialize metrics collector
     try:
@@ -103,6 +126,25 @@ async def lifespan(app: FastAPI):
         logger.warning(f"⚠️ Failed to clear metrics cache: {e}")
 
     logger.info("👋 Application shutdown completed")
+
+
+async def warm_critical_cache():
+    """预热关键缓存"""
+    try:
+        await asyncio.sleep(5)  # 等待服务完全启动
+
+        from app.services.optimized_data_integration_service import optimized_data_integration_service
+
+        # 预热概览数据
+        await optimized_data_integration_service.get_data_sources_overview()
+        logger.info("✅ Integration overview cache warmed")
+
+        # 预热数据源列表
+        await optimized_data_integration_service.get_data_sources_list()
+        logger.info("✅ Data sources list cache warmed")
+
+    except Exception as e:
+        logger.warning(f"⚠️ Cache warming failed: {e}")
 
 
 def create_app() -> FastAPI:

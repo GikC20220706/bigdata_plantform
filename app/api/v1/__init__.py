@@ -18,7 +18,9 @@ from .cluster import router as cluster_router
 from .development import router as development_router
 from .governance import router as governance_router
 from .sync import router as sync_router
-from .integration import router as integration_router  # 新增数据集成路由
+#from .integration import router as integration_router  # 新增数据集成路由
+from .optimized_integration import router as optimized_integration_router
+
 
 # Create main API router
 api_router = APIRouter(prefix="/api/v1")
@@ -61,11 +63,17 @@ api_router.include_router(
 )
 
 # 新增数据集成路由
+# api_router.include_router(
+#     integration_router,
+#     prefix="/integration",
+#     tags=["data-integration"],
+#     responses={404: {"description": "Not found"}}
+# )
+
 api_router.include_router(
-    integration_router,
+    optimized_integration_router,
     prefix="/integration",
-    tags=["data-integration"],
+    tags=["data-integration-optimized"],
     responses={404: {"description": "Not found"}}
 )
-
 __all__ = ["api_router"]

@@ -12,150 +12,32 @@ from .base import BaseModel
 
 
 class DataSource(BaseModel):
-    """
-    Model for data source definitions.
-
-    Represents external data sources that feed data into the platform,
-    including databases, APIs, file systems, and streaming sources.
-    """
+    """完整的数据源模型"""
     __tablename__ = "data_sources"
 
-    # Basic information
-    name = Column(
-        String(255),
-        nullable=False,
-        unique=True,
-        index=True,
-        comment="Data source name (unique identifier)"
-    )
+    # 基本信息
+    name = Column(String(255), nullable=False, unique=True, index=True)
+    display_name = Column(String(255), nullable=False)
+    description = Column(Text, nullable=True)
 
-    display_name = Column(
-        String(255),
-        nullable=False,
-        comment="Human-readable display name"
-    )
+    # 连接信息
+    source_type = Column(String(50), nullable=False, index=True)
+    connection_config = Column(JSON, nullable=True)  # 🔑 保存连接配置
 
-    description = Column(
-        Text,
-        nullable=True,
-        comment="Data source description"
-    )
+    # 状态信息
+    status = Column(String(20), nullable=False, default="unknown", index=True)
+    is_active = Column(Boolean, nullable=False, default=True, index=True)  # 🔑 软删除标记
 
-    # Source type and category
-    source_type = Column(
-        String(50),
-        nullable=False,
-        index=True,
-        comment="Type of data source (database, api, file, stream, etc.)"
-    )
+    # 监控信息
+    last_connection_test = Column(DateTime(timezone=True), nullable=True)
 
-    source_category = Column(
-        String(50),
-        nullable=True,
-        index=True,
-        comment="Business category (finance, hr, crm, etc.)"
-    )
+    # 🔑 新增字段（如果没有的话）
+    tables_count = Column(Integer, nullable=True, default=0)  # 表数量统计
+    data_volume_estimate = Column(String(50), nullable=True)  # 数据量估计
+    tags = Column(JSON, nullable=True)  # 标签
 
-    # Connection information
-    connection_string = Column(
-        Text,
-        nullable=True,
-        comment="Connection string or URL (encrypted)"
-    )
-
-    connection_config = Column(
-        JSON,
-        nullable=True,
-        comment="Connection configuration as JSON"
-    )
-
-    # Authentication
-    auth_type = Column(
-        String(50),
-        nullable=True,
-        comment="Authentication type (none, basic, oauth, key, etc.)"
-    )
-
-    auth_config = Column(
-        JSON,
-        nullable=True,
-        comment="Authentication configuration (encrypted)"
-    )
-
-    # Status and health
-    status = Column(
-        String(20),
-        nullable=False,
-        default="unknown",
-        index=True,
-        comment="Connection status (online, offline, error)"
-    )
-
-    is_active = Column(
-        Boolean,
-        nullable=False,
-        default=True,
-        index=True,
-        comment="Whether the data source is active"
-    )
-
-    # Data characteristics
-    data_format = Column(
-        String(50),
-        nullable=True,
-        comment="Primary data format (json, csv, parquet, etc.)"
-    )
-
-    update_frequency = Column(
-        String(50),
-        nullable=True,
-        comment="How often data is updated (realtime, hourly, daily, etc.)"
-    )
-
-    # Volume estimates
-    estimated_records = Column(
-        Integer,
-        nullable=True,
-        comment="Estimated number of records"
-    )
-
-    estimated_size_mb = Column(
-        Integer,
-        nullable=True,
-        comment="Estimated data size in MB"
-    )
-
-    # Monitoring
-    last_connection_test = Column(
-        DateTime(timezone=True),
-        nullable=True,
-        comment="Last successful connection test"
-    )
-
-    last_data_sync = Column(
-        DateTime(timezone=True),
-        nullable=True,
-        comment="Last successful data synchronization"
-    )
-
-    # Metadata
-    schema_definition = Column(
-        JSON,
-        nullable=True,
-        comment="Data schema definition as JSON"
-    )
-
-    tags = Column(
-        JSON,
-        nullable=True,
-        comment="Tags for categorization and search"
-    )
-
-    # Relationships
+    # 关系
     connections = relationship("DataSourceConnection", back_populates="data_source", cascade="all, delete-orphan")
-
-    def __repr__(self) -> str:
-        return f"<DataSource(name='{self.name}', type='{self.source_type}', status='{self.status}')>"
 
 
 class DataSourceConnection(BaseModel):
