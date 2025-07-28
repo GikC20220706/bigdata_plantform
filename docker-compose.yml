@@ -1,24 +1,42 @@
 version: '3.8'
 
 services:
+  # MySQL数据库
   mysql:
     image: mysql:8.0
     container_name: bigdata-mysql
+    restart: unless-stopped
     environment:
       MYSQL_ROOT_PASSWORD: password
       MYSQL_DATABASE: bigdata_platform
       MYSQL_USER: bigdata
       MYSQL_PASSWORD: bigdata123
+      # 优化MySQL配置
+      MYSQL_INNODB_BUFFER_POOL_SIZE: 256M
+      MYSQL_INNODB_LOG_FILE_SIZE: 64M
     ports:
       - "3306:3306"
     volumes:
       - mysql_data:/var/lib/mysql
-      - ./config/mysql/init.sql:/docker-entrypoint-initdb.d/init.sql
-    command: --default-authentication-plugin=mysql_native_password
+      - ./config/mysql/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    command: >
+      --default-authentication-plugin=mysql_native_password
+      --character-set-server=utf8mb4
+      --collation-server=utf8mb4_unicode_ci
+      --innodb-buffer-pool-size=256M
+      --innodb-log-file-size=64M
+      --max-connections=200
+      --max-allowed-packet=64M
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "bigdata", "-pbigdata123"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
     networks:
       - bigdata-network
 
-  # Redis for caching
+  # Redis缓存
   redis:
     image: redis:7-alpine
     container_name: bigdata-redis
@@ -27,122 +45,153 @@ services:
       - "6379:6379"
     volumes:
       - redis_data:/data
-    command: redis-server --appendonly yes --maxmemory 512mb --maxmemory-policy allkeys-lru
+      - ./config/redis/redis.conf:/etc/redis/redis.conf:ro
+    command: >
+      redis-server /etc/redis/redis.conf
+      --appendonly yes
+      --maxmemory 512mb
+      --maxmemory-policy allkeys-lru
+      --save 900 1
+      --save 300 10
+      --save 60 10000
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 10s
       timeout: 5s
       retries: 5
+      start_period: 30s
     networks:
       - bigdata-network
 
-  # Main application
+  # 主应用
   bigdata-platform:
-    build:
-      context: .
-      dockerfile: Dockerfile
+    image: bigdata-platform:3.2.1-aarch64
     container_name: bigdata-platform
     restart: unless-stopped
     ports:
       - "8000:8000"
     environment:
-      # Application settings
+      # 应用基础设置
       - DEBUG=false
       - HOST=0.0.0.0
       - PORT=8000
       - IS_LOCAL_DEV=false
       - MOCK_DATA_MODE=${MOCK_DATA_MODE:-false}
 
-      # MySQL configuration
+      # 数据库配置
       - DATABASE_URL=mysql+aiomysql://bigdata:bigdata123@mysql:3306/bigdata_platform?charset=utf8mb4
-      # Redis configuration
-      - REDIS_URL=redis://redis:6379/0
 
-      # Cache configuration
+      # Redis配置
+      - REDIS_URL=redis://redis:6379/0
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+
+      # 缓存配置
       - CACHE_TTL=${CACHE_TTL:-300}
+      - CACHE_OVERVIEW_EXPIRE=${CACHE_OVERVIEW_EXPIRE:-60}
+      - CACHE_CLUSTER_EXPIRE=${CACHE_CLUSTER_EXPIRE:-30}
+      - CACHE_METRICS_EXPIRE=${CACHE_METRICS_EXPIRE:-15}
       - METRICS_CACHE_TTL=${METRICS_CACHE_TTL:-30}
-      - METRICS_SSH_TIMEOUT=${METRICS_SSH_TIMEOUT:-5}
+      - METRICS_SSH_TIMEOUT=${METRICS_SSH_TIMEOUT:-10}
       - METRICS_MAX_CONCURRENT=${METRICS_MAX_CONCURRENT:-5}
 
-      # Database configuration
-      - DATABASE_URL=${DATABASE_URL:-sqlite:///./data/bigdata_platform.db}
-
-      # Hadoop cluster configuration
+      # Hadoop集群配置
       - HADOOP_HOME=${HADOOP_HOME:-/opt/hadoop}
       - HDFS_NAMENODE=${HDFS_NAMENODE:-hdfs://hadoop101:8020}
       - HDFS_USER=${HDFS_USER:-bigdata}
+      - HADOOP_NAMENODE_HOST=${HADOOP_NAMENODE_HOST:-192.168.1.100}
+      - HADOOP_NAMENODE_PORT=${HADOOP_NAMENODE_PORT:-9000}
 
-      # Hive configuration
+      # Hive配置
       - HIVE_SERVER_HOST=${HIVE_SERVER_HOST:-hadoop101}
       - HIVE_SERVER_PORT=${HIVE_SERVER_PORT:-10000}
       - HIVE_USERNAME=${HIVE_USERNAME:-bigdata}
       - HIVE_PASSWORD=${HIVE_PASSWORD:-gqdw8862}
+      - HIVE_HOST=${HIVE_HOST:-192.168.1.100}
+      - HIVE_PORT=${HIVE_PORT:-10000}
 
-      # Flink configuration
+      # Flink配置
       - FLINK_JOBMANAGER_HOST=${FLINK_JOBMANAGER_HOST:-hadoop101}
       - FLINK_JOBMANAGER_PORT=${FLINK_JOBMANAGER_PORT:-8081}
 
-      # Doris configuration
+      # Doris配置
       - DORIS_FE_HOST=${DORIS_FE_HOST:-hadoop101}
       - DORIS_FE_PORT=${DORIS_FE_PORT:-8060}
       - DORIS_USERNAME=${DORIS_USERNAME:-root}
       - DORIS_PASSWORD=${DORIS_PASSWORD:-1qaz@WSX3edc}
 
-      # SSH and cluster access configuration
+      # SSH配置
       - SSH_KEY_PATH=/app/ssh_keys/id_rsa
       - SSH_USERNAME=${SSH_USERNAME:-bigdata}
       - SSH_PASSWORD=${SSH_PASSWORD:-}
       - SSH_PORT=${SSH_PORT:-22}
       - SSH_TIMEOUT=${SSH_TIMEOUT:-10}
 
-      # Node configuration
+      # 集群节点配置
       - CLUSTER_NODES_CONFIG_FILE=/app/config/nodes.json
       - CLUSTER_NODES_CONFIG_JSON=${CLUSTER_NODES_CONFIG_JSON:-}
+      - CLUSTER_AUTO_DISCOVERY=${CLUSTER_AUTO_DISCOVERY:-false}
 
-      # Security
+      # 安全配置
       - SECRET_KEY=${SECRET_KEY:-your-secret-key-change-in-production}
 
-      # Logging
+      # 日志配置
       - LOG_LEVEL=${LOG_LEVEL:-INFO}
       - LOG_FILE=/app/logs/bigdata_platform.log
 
-      # File uploads
+      # 文件上传配置
       - UPLOAD_DIR=/app/uploads
       - MAX_UPLOAD_SIZE=${MAX_UPLOAD_SIZE:-52428800}
 
+      # 时区设置
+      - TZ=Asia/Shanghai
+
     volumes:
-      # Persistent data
+      # 持久化数据
       - ./logs:/app/logs
       - ./uploads:/app/uploads
       - ./data:/app/data
 
-      # Configuration files
+      # 配置文件（只读）
       - ./config/nodes.json:/app/config/nodes.json:ro
       - ./config:/app/config:ro
 
-      # SSH keys for cluster access (create this directory and add your keys)
+      # SSH密钥（只读，严格权限）
       - ./ssh_keys:/app/ssh_keys:ro
 
-      # Optional: Mount additional configuration
+      # 环境配置（只读）
       - ./.env:/app/.env:ro
 
+      # 时区数据
+      - /etc/localtime:/etc/localtime:ro
+
     depends_on:
+      mysql:
+        condition: service_healthy
       redis:
         condition: service_healthy
-      mysql:
-        condition: service_started
 
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/api/v1/overview/health"]
       interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 60s
+      timeout: 15s
+      retries: 5
+      start_period: 120s
+
+    # 资源限制（防止在生产环境中过度消耗资源）
+    deploy:
+      resources:
+        limits:
+          cpus: '2.0'
+          memory: 2G
+        reservations:
+          cpus: '0.5'
+          memory: 512M
 
     networks:
       - bigdata-network
 
-  # Nginx reverse proxy for production
+  # Nginx反向代理（生产环境）
   nginx:
     image: nginx:alpine
     container_name: bigdata-nginx
@@ -153,19 +202,43 @@ services:
     volumes:
       - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
       - ./nginx/ssl:/etc/nginx/ssl:ro
+      - ./nginx/logs:/var/log/nginx
     depends_on:
-      - bigdata-platform
+      bigdata-platform:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
     networks:
       - bigdata-network
 
+# 数据卷
 volumes:
+  mysql_data:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: ./data/mysql
   redis_data:
     driver: local
-  mysql_data:
+    driver_opts:
+      type: none
+      o: bind
+      device: ./data/redis
 
+# 网络配置
 networks:
   bigdata-network:
     driver: bridge
     ipam:
+      driver: default
       config:
         - subnet: 172.20.0.0/16
+          gateway: 172.20.0.1
+    driver_opts:
+      com.docker.network.bridge.name: br-bigdata
+      com.docker.network.driver.mtu: 1500
