@@ -20,6 +20,7 @@ from .governance import router as governance_router
 from .sync import router as sync_router
 #from .integration import router as integration_router  # 新增数据集成路由
 from .optimized_integration import router as optimized_integration_router
+from .business_system import router as business_system_router #业务系统接入路由
 
 
 # Create main API router
@@ -74,6 +75,12 @@ api_router.include_router(
     optimized_integration_router,
     prefix="/integration",
     tags=["data-integration-optimized"],
+    responses={404: {"description": "Not found"}}
+)
+api_router.include_router(
+    business_system_router,
+    prefix="/business-systems",
+    tags=["business-systems"],
     responses={404: {"description": "Not found"}}
 )
 __all__ = ["api_router"]

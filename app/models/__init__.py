@@ -9,6 +9,7 @@ from .base import Base, BaseModel, TimestampMixin
 from .cluster import Cluster, ClusterNode, ClusterMetric
 from .data_source import DataSource, DataSourceConnection
 from .task import TaskDefinition, TaskExecution, TaskSchedule
+from .business_system import BusinessSystem,BusinessSystemDataSource
 
 # Export all models for easy importing
 __all__ = [
@@ -30,6 +31,11 @@ __all__ = [
     "TaskDefinition",
     "TaskExecution",
     "TaskSchedule",
+
+    # 业务系统模型
+    "BusinessSystem",
+    "BusinessSystemDataSource",
+
 ]
 
 
@@ -39,5 +45,6 @@ def get_all_models():
     return [
         Cluster, ClusterNode, ClusterMetric,
         DataSource, DataSourceConnection,
-        TaskDefinition, TaskExecution, TaskSchedule
+        TaskDefinition, TaskExecution, TaskSchedule,
+        BusinessSystem, BusinessSystemDataSource
     ]
