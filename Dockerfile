@@ -1,4 +1,4 @@
-# Dockerfile - 使用python slim镜像，支持ARM64
+# Dockerfile - 优化版本，适用于aarch64离线部署
 FROM docker.m.daocloud.io/library/python:3.9-slim
 
 # 设置镜像元数据

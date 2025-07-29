@@ -219,16 +219,8 @@ services:
 volumes:
   mysql_data:
     driver: local
-    driver_opts:
-      type: none
-      o: bind
-      device: ./data/mysql
   redis_data:
     driver: local
-    driver_opts:
-      type: none
-      o: bind
-      device: ./data/redis
 
 # 网络配置
 networks:
