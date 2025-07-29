@@ -138,6 +138,7 @@ class HDFSClient(BaseClient):
         super().__init__()
         self.hadoop_client = HadoopClient()
         self.namenode_url = self._build_namenode_url()
+        self.hdfs_user = settings.HDFS_USER
 
     def _build_namenode_url(self) -> str:
         """Build correct namenode URL for WebHDFS API."""
@@ -166,7 +167,8 @@ class HDFSClient(BaseClient):
 
         # Try WebHDFS API first
         try:
-            webhdfs_url = f"{self.namenode_url}/jmx?qry=Hadoop:service=NameNode,name=FSNamesystemState"
+            # 修改这里：添加user.name参数
+            webhdfs_url = f"{self.namenode_url}/jmx?qry=Hadoop:service=NameNode,name=FSNamesystemState&user.name={self.hdfs_user}"
             logger.debug(f"Trying WebHDFS API: {webhdfs_url}")
 
             response = requests.get(webhdfs_url, timeout=10)
@@ -175,13 +177,20 @@ class HDFSClient(BaseClient):
                 beans = data.get('beans', [])
                 if beans:
                     fs_state = beans[0]
-                    return {
+                    storage_info = {
                         'total_size': fs_state.get('CapacityTotal', 0),
                         'used_size': fs_state.get('CapacityUsed', 0),
                         'available_size': fs_state.get('CapacityRemaining', 0),
+                        'usage_percent': (fs_state.get('CapacityUsed', 0) / max(fs_state.get('CapacityTotal', 1),
+                                                                                1)) * 100,
                         'files_count': fs_state.get('FilesTotal', 0),
-                        'blocks_count': fs_state.get('BlocksTotal', 0)
+                        'blocks_count': fs_state.get('BlocksTotal', 0),
+                        'replication_factor': fs_state.get('DefaultReplication', 3)
                     }
+                    logger.info(f"✅ WebHDFS API调用成功，获取到真实HDFS数据")
+                    return storage_info
+            else:
+                logger.warning(f"WebHDFS API返回状态码: {response.status_code}")
         except Exception as e:
             logger.warning(f"WebHDFS API failed: {str(e)}")
 
