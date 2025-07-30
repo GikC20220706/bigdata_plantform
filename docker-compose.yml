@@ -215,12 +215,32 @@ services:
     networks:
       - bigdata-network
 
+
+
+  # DataX执行引擎
+  datax-engine:
+    image: openjdk:8-jre-slim
+    container_name: bigdata-datax
+    restart: unless-stopped
+    volumes:
+      - ./datax/datax:/opt/datax:ro
+      - ./datax/configs:/opt/datax/jobs
+      - ./datax/logs:/opt/datax/logs
+    environment:
+      - DATAX_HOME=/opt/datax
+    networks:
+      - bigdata-network
+    command: tail -f /dev/null
+
 # 数据卷
 volumes:
   mysql_data:
     driver: local
   redis_data:
     driver: local
+      - ./datax/configs:/app/datax/jobs
+      - ./datax/logs:/app/datax/logs
+      - ./datax/scripts:/app/datax/scripts:ro
 
 # 网络配置
 networks:

@@ -24,6 +24,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     g++ \
     make \
     pkg-config \
+    #datax 相关 \
+    openjdk-8-jdk \
     # SSL和加密相关
     libssl-dev \
     libffi-dev \
