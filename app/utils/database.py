@@ -4,6 +4,8 @@ Database utilities and connection management for the Big Data Platform.
 """
 
 from typing import Generator
+
+from loguru import logger
 from sqlalchemy import create_engine
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker, Session
@@ -70,22 +72,41 @@ def get_db() -> Generator[Session, None, None]:
 def create_tables():
     """Create all database tables."""
     try:
-        # 导入所有模型以确保它们被注册
+        # 🔧 修复：导入所有模型以确保它们被注册
         from app.models import (
+            Base,  # 确保导入Base
             Cluster, ClusterNode, ClusterMetric,
             DataSource, DataSourceConnection,
-            TaskDefinition, TaskExecution, TaskSchedule
+            TaskDefinition, TaskExecution, TaskSchedule,
+            BusinessSystem, BusinessSystemDataSource  # 添加业务系统模型
         )
 
+        # 🔧 添加调试信息
+        logger.info("正在创建数据库表...")
+        logger.info(f"发现 {len(Base.metadata.tables)} 个表需要创建")
+
+        # 创建所有表
         Base.metadata.create_all(bind=engine)
-        print("✅ Database tables created successfully")
+
+        # 🔧 验证表是否创建成功
+        with engine.connect() as conn:
+            if settings.is_mysql:
+                result = conn.execute("SHOW TABLES")
+                tables = [row[0] for row in result.fetchall()]
+                logger.info(f"✅ 成功创建 {len(tables)} 个表: {tables}")
+            else:
+                result = conn.execute("SELECT name FROM sqlite_master WHERE type='table'")
+                tables = [row[0] for row in result.fetchall()]
+                logger.info(f"✅ 成功创建 {len(tables)} 个表: {tables}")
 
         # 如果是MySQL，创建索引
         if settings.is_mysql:
             create_mysql_indexes()
 
     except Exception as e:
-        print(f"❌ Failed to create tables: {e}")
+        logger.error(f"❌ 创建数据库表失败: {e}")
+        import traceback
+        logger.error(traceback.format_exc())
         raise
 
 

@@ -8,7 +8,7 @@ from typing import Any, Dict
 from sqlalchemy import Column, DateTime, Integer, Text
 from sqlalchemy.ext.declarative import as_declarative, declared_attr
 from sqlalchemy.sql import func
-
+from sqlalchemy.ext.declarative import declarative_base
 
 @as_declarative()
 class Base:
@@ -82,3 +82,4 @@ class BaseModel(Base, TimestampMixin):
     def __repr__(self) -> str:
         """String representation of the model."""
         return f"<{self.__class__.__name__}(id={self.id})>"
+Base = declarative_base()

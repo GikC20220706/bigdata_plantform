@@ -1,3 +1,4 @@
+# app/models/__init__.py
 """
 Database models package for the Big Data Platform.
 
@@ -9,7 +10,12 @@ from .base import Base, BaseModel, TimestampMixin
 from .cluster import Cluster, ClusterNode, ClusterMetric
 from .data_source import DataSource, DataSourceConnection
 from .task import TaskDefinition, TaskExecution, TaskSchedule
-from .business_system import BusinessSystem,BusinessSystemDataSource
+from .business_system import BusinessSystem, BusinessSystemDataSource
+# 🆕 新增智能同步相关模型
+from .sync_task import (
+    SyncTask, SyncTableMapping, SyncExecution, SyncTableResult,
+    DataSourceMetadata, SyncTemplate
+)
 
 # Export all models for easy importing
 __all__ = [
@@ -26,16 +32,23 @@ __all__ = [
     # Data source models
     "DataSource",
     "DataSourceConnection",
+    "DataSourceMetadata",  # 🆕
 
     # Task models
     "TaskDefinition",
     "TaskExecution",
     "TaskSchedule",
 
-    # 业务系统模型
+    # Business system models
     "BusinessSystem",
     "BusinessSystemDataSource",
 
+    # 🆕 Smart sync models
+    "SyncTask",
+    "SyncTableMapping",
+    "SyncExecution",
+    "SyncTableResult",
+    "SyncTemplate",
 ]
 
 
@@ -43,8 +56,12 @@ __all__ = [
 def get_all_models():
     """Get all model classes for Alembic migrations."""
     return [
+        # Original models
         Cluster, ClusterNode, ClusterMetric,
         DataSource, DataSourceConnection,
         TaskDefinition, TaskExecution, TaskSchedule,
-        BusinessSystem, BusinessSystemDataSource
+        BusinessSystem, BusinessSystemDataSource,
+        # 🆕 New sync models
+        SyncTask, SyncTableMapping, SyncExecution, SyncTableResult,
+        DataSourceMetadata, SyncTemplate
     ]

@@ -39,7 +39,7 @@ class Settings(BaseSettings):
 
     # Database Configuration - 修改默认值为MySQL
     DATABASE_URL: str = Field(
-        default="mysql+aiomysql://root:1qaz@WSX3edc@hadoop101:3306/bigdata_platform?charset=utf8mb4",
+        default="mysql+aiomysql://bigdata:bigdata123@mysql:3306/bigdata_platform?charset=utf8mb4",
         env="DATABASE_URL"
     )
 
