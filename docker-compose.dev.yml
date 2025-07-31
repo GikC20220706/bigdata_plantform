@@ -1,0 +1,270 @@
+version: '3.8'
+
+services:
+  # MySQL数据库
+  mysql:
+    image: mysql:8.0
+    container_name: bigdata-mysql
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: password
+      MYSQL_DATABASE: bigdata_platform
+      MYSQL_USER: bigdata
+      MYSQL_PASSWORD: bigdata123
+      # 优化MySQL配置
+      MYSQL_INNODB_BUFFER_POOL_SIZE: 256M
+      MYSQL_INNODB_LOG_FILE_SIZE: 64M
+    ports:
+      - "3306:3306"
+    volumes:
+      - mysql_data:/var/lib/mysql
+      - ./config/mysql/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    command: >
+      --default-authentication-plugin=mysql_native_password
+      --character-set-server=utf8mb4
+      --collation-server=utf8mb4_unicode_ci
+      --innodb-buffer-pool-size=256M
+      --innodb-log-file-size=64M
+      --max-connections=200
+      --max-allowed-packet=64M
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "bigdata", "-pbigdata123"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+    networks:
+      - bigdata-network
+
+  # Redis缓存
+  redis:
+    image: redis:7-alpine
+    container_name: bigdata-redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+      - ./config/redis/redis.conf:/etc/redis/redis.conf:ro
+    command: >
+      redis-server /etc/redis/redis.conf
+      --appendonly yes
+      --maxmemory 512mb
+      --maxmemory-policy allkeys-lru
+      --save 900 1
+      --save 300 10
+      --save 60 10000
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    networks:
+      - bigdata-network
+
+  # 主应用
+  bigdata-platform:
+    image: bigdata-platform:3.2.1-aarch64
+    container_name: bigdata-platform
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    environment:
+      # 应用基础设置
+      - DEBUG=false
+      - HOST=0.0.0.0
+      - PORT=8000
+      - IS_LOCAL_DEV=false
+      - MOCK_DATA_MODE=${MOCK_DATA_MODE:-false}
+
+      # 数据库配置
+      - DATABASE_URL=mysql+aiomysql://bigdata:bigdata123@mysql:3306/bigdata_platform?charset=utf8mb4
+
+      # Redis配置
+      - REDIS_URL=redis://redis:6379/0
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+
+      # 缓存配置
+      - CACHE_TTL=${CACHE_TTL:-300}
+      - CACHE_OVERVIEW_EXPIRE=${CACHE_OVERVIEW_EXPIRE:-60}
+      - CACHE_CLUSTER_EXPIRE=${CACHE_CLUSTER_EXPIRE:-30}
+      - CACHE_METRICS_EXPIRE=${CACHE_METRICS_EXPIRE:-15}
+      - METRICS_CACHE_TTL=${METRICS_CACHE_TTL:-30}
+      - METRICS_SSH_TIMEOUT=${METRICS_SSH_TIMEOUT:-10}
+      - METRICS_MAX_CONCURRENT=${METRICS_MAX_CONCURRENT:-5}
+
+      # Hadoop集群配置
+      - HADOOP_HOME=${HADOOP_HOME:-/opt/hadoop}
+      - HDFS_NAMENODE=${HDFS_NAMENODE:-hdfs://hadoop101:8020}
+      - HDFS_USER=${HDFS_USER:-bigdata}
+      - HADOOP_NAMENODE_HOST=${HADOOP_NAMENODE_HOST:-192.168.1.100}
+      - HADOOP_NAMENODE_PORT=${HADOOP_NAMENODE_PORT:-9000}
+
+      # Hive配置
+      - HIVE_SERVER_HOST=${HIVE_SERVER_HOST:-hadoop101}
+      - HIVE_SERVER_PORT=${HIVE_SERVER_PORT:-10000}
+      - HIVE_USERNAME=${HIVE_USERNAME:-bigdata}
+      - HIVE_PASSWORD=${HIVE_PASSWORD:-gqdw8862}
+      - HIVE_HOST=${HIVE_HOST:-192.168.1.100}
+      - HIVE_PORT=${HIVE_PORT:-10000}
+
+      # Flink配置
+      - FLINK_JOBMANAGER_HOST=${FLINK_JOBMANAGER_HOST:-hadoop101}
+      - FLINK_JOBMANAGER_PORT=${FLINK_JOBMANAGER_PORT:-8081}
+
+      # Doris配置
+      - DORIS_FE_HOST=${DORIS_FE_HOST:-hadoop101}
+      - DORIS_FE_PORT=${DORIS_FE_PORT:-8060}
+      - DORIS_USERNAME=${DORIS_USERNAME:-root}
+      - DORIS_PASSWORD=${DORIS_PASSWORD:-1qaz@WSX3edc}
+
+      # SSH配置
+      - SSH_KEY_PATH=/app/ssh_keys/id_rsa
+      - SSH_USERNAME=${SSH_USERNAME:-bigdata}
+      - SSH_PASSWORD=${SSH_PASSWORD:-}
+      - SSH_PORT=${SSH_PORT:-22}
+      - SSH_TIMEOUT=${SSH_TIMEOUT:-10}
+
+      # 集群节点配置
+      - CLUSTER_NODES_CONFIG_FILE=/app/config/nodes.json
+      - CLUSTER_NODES_CONFIG_JSON=${CLUSTER_NODES_CONFIG_JSON:-}
+      - CLUSTER_AUTO_DISCOVERY=${CLUSTER_AUTO_DISCOVERY:-false}
+
+      # 安全配置
+      - SECRET_KEY=${SECRET_KEY:-your-secret-key-change-in-production}
+
+      # 日志配置
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+      - LOG_FILE=/app/logs/bigdata_platform.log
+
+      # 文件上传配置
+      - UPLOAD_DIR=/app/uploads
+      - MAX_UPLOAD_SIZE=${MAX_UPLOAD_SIZE:-52428800}
+
+      # 时区设置
+      - TZ=Asia/Shanghai
+      # 添加DataX环境变量
+      - DATAX_HOME=/app/datax/datax
+      - JAVA_HOME=/usr/lib/jvm/java-8-openjdk-amd64
+
+    volumes:
+      # 核心：直接挂载源代码目录 - 修改立即生效！
+      - ./app:/app/app
+      - ./config:/app/config
+      - ./startup.py:/app/startup.py
+      - ./requirements.txt:/app/requirements.txt
+
+      # 🔧 DataX相关路径统一
+      - ./datax/configs:/app/datax/configs    # 统一用configs而不是jobs
+      - ./datax/logs:/app/datax/logs
+      - ./datax/datax:/app/datax/datax:ro     # 添加DataX程序挂载
+      # 持久化数据
+      - ./logs:/app/logs
+      - ./uploads:/app/uploads
+      - ./data:/app/data
+
+      # 配置文件（只读）
+      - ./config/nodes.json:/app/config/nodes.json:ro
+      - ./config:/app/config:ro
+
+      # SSH密钥（只读，严格权限）
+      - ./ssh_keys:/app/ssh_keys:ro
+
+      # 环境配置（只读）
+      - ./.env:/app/.env:ro
+
+      # 时区数据
+      - /etc/localtime:/etc/localtime:ro
+
+
+    depends_on:
+      mysql:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/api/v1/overview/health"]
+      interval: 30s
+      timeout: 15s
+      retries: 5
+      start_period: 120s
+
+    # 资源限制（防止在生产环境中过度消耗资源）
+    deploy:
+      resources:
+        limits:
+          cpus: '2.0'
+          memory: 2G
+        reservations:
+          cpus: '0.5'
+          memory: 512M
+
+    networks:
+      - bigdata-network
+
+  # Nginx反向代理（生产环境）
+  nginx:
+    image: nginx:alpine
+    container_name: bigdata-nginx
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./nginx/ssl:/etc/nginx/ssl:ro
+      - ./nginx/logs:/var/log/nginx
+    depends_on:
+      bigdata-platform:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    networks:
+      - bigdata-network
+
+
+
+  # DataX执行引擎
+  datax-engine:
+    image: openjdk:8-jre-slim
+    container_name: bigdata-datax
+    restart: unless-stopped
+    volumes:
+      - ./datax/datax:/opt/datax:ro
+      - ./datax/configs:/opt/datax/configs
+      - ./datax/logs:/opt/datax/logs
+    environment:
+      - DATAX_HOME=/opt/datax
+    networks:
+      - bigdata-network
+    command: tail -f /dev/null
+
+# 数据卷
+volumes:
+  mysql_data:
+    driver: local
+  redis_data:
+    driver: local
+      - ./datax/configs:/app/datax/jobs
+      - ./datax/logs:/app/datax/logs
+      - ./datax/scripts:/app/datax/scripts:ro
+
+# 网络配置
+networks:
+  bigdata-network:
+    driver: bridge
+    ipam:
+      driver: default
+      config:
+        - subnet: 172.20.0.0/16
+          gateway: 172.20.0.1
+    driver_opts:
+      com.docker.network.bridge.name: br-bigdata
+      com.docker.network.driver.mtu: 1500
