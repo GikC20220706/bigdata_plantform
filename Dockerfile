@@ -65,6 +65,18 @@ RUN pip install --no-cache-dir --upgrade pip setuptools wheel \
     # 验证关键包安装
     && python -c "import fastapi, uvicorn, sqlalchemy, redis, paramiko; print('Core packages imported successfully')"
 
+# 复制libkci.so.5文件到镜像中
+COPY libkci.so.5 /usr/lib/libkci.so.5
+
+# 设置libkci.so.5的权限并更新库缓存
+RUN chmod 755 /usr/lib/libkci.so.5 \
+    && ldconfig \
+    && echo "libkci.so.5 installed successfully"
+
+# 验证libkci.so.5安装
+RUN ldconfig -p | grep kci || echo "Warning: libkci.so.5 not found in ldconfig cache" \
+    && ls -la /usr/lib/libkci.so.5
+
 # 复制应用代码（放在依赖安装之后，优化构建缓存）
 COPY . .
 
