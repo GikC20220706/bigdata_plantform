@@ -994,8 +994,143 @@
             color: #666;
             margin-top: 15px;
         }
+
+        /* 文件上传区域 */
+        .upload-area {
+            margin-bottom: 20px;
+        }
+
+        .upload-zone {
+            border: 2px dashed #1e3c72;
+            border-radius: 10px;
+            padding: 40px;
+            text-align: center;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            background: rgba(30, 60, 114, 0.05);
+        }
+
+        .upload-zone:hover {
+            border-color: #2a5298;
+            background: rgba(30, 60, 114, 0.1);
+        }
+
+        .upload-zone.dragover {
+            border-color: #28a745;
+            background: rgba(40, 167, 69, 0.1);
+        }
+
+        /* 数据源卡片扩展 */
+        .source-actions {
+            display: flex;
+            gap: 5px;
+            margin-top: 10px;
+            justify-content: flex-end;
+        }
+
+        .source-card .source-actions .action-btn {
+            padding: 4px 8px;
+            font-size: 11px;
+        }
+
+        /* 查询结果表格 */
+        .query-results-table {
+            width: 100%;
+            max-height: 400px;
+            overflow: auto;
+            border: 1px solid #ddd;
+            border-radius: 5px;
+        }
+
+        .query-results-table table {
+            margin: 0;
+            min-width: auto;
+        }
+
+        .query-results-table th {
+            position: sticky;
+            top: 0;
+            background: #f8f9fa;
+            z-index: 10;
+        }
+
+        /* 模态框样式 */
+        .modal {
+            display: none;
+            position: fixed;
+            z-index: 1000;
+            left: 0;
+            top: 0;
+            width: 100%;
+            height: 100%;
+            background-color: rgba(0,0,0,0.5);
+        }
+
+        .modal-content {
+            background-color: white;
+            margin: 5% auto;
+            padding: 20px;
+            border-radius: 10px;
+            width: 90%;
+            max-width: 600px;
+            max-height: 80%;
+            overflow-y: auto;
+        }
+
+        .modal-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 20px;
+            padding-bottom: 10px;
+            border-bottom: 1px solid #eee;
+        }
+
+        .modal-title {
+            font-size: 18px;
+            font-weight: bold;
+            color: #333;
+        }
+
+        .close {
+            font-size: 24px;
+            font-weight: bold;
+            cursor: pointer;
+            color: #999;
+        }
+
+        .close:hover {
+            color: #333;
+        }
+
+        .form-group {
+            margin-bottom: 15px;
+        }
+
+        .form-group label {
+            display: block;
+            margin-bottom: 5px;
+            font-weight: bold;
+            color: #333;
+        }
+
+        .form-group input,
+        .form-group select,
+        .form-group textarea {
+            width: 100%;
+            padding: 10px;
+            border: 1px solid #ddd;
+            border-radius: 5px;
+            font-size: 14px;
+        }
+
+        .form-group textarea {
+            resize: vertical;
+            min-height: 80px;
+        }
     </style>
 </head>
+
 <body>
 <button class="toggle-sidebar">
     <i class="fas fa-bars"></i>
@@ -1026,11 +1161,29 @@
                 </div>
             </li>
 
-            <li class="nav-category">数据管理</li>
+            <li class="nav-category">数据集成</li>
             <li class="nav-item">
-                <div class="nav-link" data-page="ingestion">
+                <div class="nav-link" data-page="integration-overview">
                     <span class="nav-icon">🔌</span>
-                    <span class="nav-text">数据接入</span>
+                    <span class="nav-text">集成概览</span>
+                </div>
+            </li>
+            <li class="nav-item">
+                <div class="nav-link" data-page="data-sources">
+                    <span class="nav-icon">🗄️</span>
+                    <span class="nav-text">数据源管理</span>
+                </div>
+            </li>
+            <li class="nav-item">
+                <div class="nav-link" data-page="excel-integration">
+                    <span class="nav-icon">📊</span>
+                    <span class="nav-text">Excel集成</span>
+                </div>
+            </li>
+            <li class="nav-item">
+                <div class="nav-link" data-page="query-explorer">
+                    <span class="nav-icon">🔍</span>
+                    <span class="nav-text">查询探索器</span>
                 </div>
             </li>
             <li class="nav-item">
@@ -1233,32 +1386,6 @@
             </div>
         </div>
 
-        <!-- 数据接入页面 -->
-        <div class="page-content" id="ingestion">
-            <h2 class="page-title">数据接入管理</h2>
-            <p class="page-description">配置和管理数据源接入，支持多种数据源类型，实现数据的实时采集和批量导入</p>
-
-            <div class="feature-section">
-                <h3 class="section-title">
-                    <span>📊</span>
-                    <span>接入概览</span>
-                </h3>
-                <div id="ingestion-overview">
-                    <div class="loading">加载中...</div>
-                </div>
-            </div>
-
-            <div class="feature-section">
-                <h3 class="section-title">
-                    <span>🔌</span>
-                    <span>数据源列表</span>
-                </h3>
-                <div id="data-sources">
-                    <div class="loading">加载中...</div>
-                </div>
-            </div>
-        </div>
-
         <!-- 数据开发页面 -->
         <div class="page-content" id="development">
             <h2 class="page-title">数据开发平台</h2>
@@ -1397,9 +1524,167 @@
             <h2 class="page-title">系统配置</h2>
             <p class="page-description">配置系统参数，优化系统性能</p>
         </div>
+
+        <!-- 数据集成概览 -->
+        <div class="page-content" id="integration-overview">
+            <h2 class="page-title">数据集成概览</h2>
+            <p class="page-description">统一管理所有数据源连接，监控数据集成状态</p>
+
+            <div class="feature-section">
+                <h3 class="section-title">
+                    <span>📊</span>
+                    <span>集成统计</span>
+                </h3>
+                <div class="stats-grid" id="integration-stats">
+                    <div class="loading">加载中...</div>
+                </div>
+            </div>
+
+            <div class="feature-section">
+                <h3 class="section-title">
+                    <span>🔗</span>
+                    <span>连接状态</span>
+                </h3>
+                <div id="connection-status-grid">
+                    <div class="loading">加载中...</div>
+                </div>
+            </div>
+        </div>
+
+        <!-- 数据源管理 -->
+        <div class="page-content" id="data-sources">
+            <h2 class="page-title">数据源管理</h2>
+            <p class="page-description">配置和管理各种类型的数据源连接</p>
+
+            <div class="feature-section">
+                <div class="table-controls">
+                    <h3>数据源列表</h3>
+                    <div class="search-filters">
+                        <input type="text" class="search-input" id="source-search" placeholder="搜索数据源...">
+                        <select class="filter-select" id="source-type-filter">
+                            <option value="">全部类型</option>
+                        </select>
+                        <button class="btn btn-primary" onclick="showAddSourceModal()">➕ 添加数据源</button>
+                        <button class="btn btn-secondary" onclick="batchTestConnections()">🔧 批量测试</button>
+                    </div>
+                </div>
+                <div id="sources-grid">
+                    <div class="loading">加载中...</div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Excel集成 -->
+        <div class="page-content" id="excel-integration">
+            <h2 class="page-title">Excel文件集成</h2>
+            <p class="page-description">上传和管理Excel文件作为数据源</p>
+
+            <div class="feature-section">
+                <h3 class="section-title">
+                    <span>📤</span>
+                    <span>文件上传</span>
+                </h3>
+                <div class="upload-area" id="excel-upload-area">
+                    <div class="upload-zone" onclick="document.getElementById('excel-file-input').click()">
+                        <i class="fas fa-cloud-upload-alt" style="font-size: 48px; color: #1e3c72; margin-bottom: 10px;"></i>
+                        <p>点击或拖拽Excel文件到这里</p>
+                        <p style="font-size: 12px; color: #666;">支持 .xlsx, .xls 格式，最大50MB</p>
+                    </div>
+                    <input type="file" id="excel-file-input" accept=".xlsx,.xls" style="display: none;" onchange="handleExcelUpload(this)">
+                </div>
+            </div>
+
+            <div class="feature-section">
+                <h3 class="section-title">
+                    <span>📋</span>
+                    <span>Excel数据源</span>
+                </h3>
+                <div id="excel-sources">
+                    <div class="loading">加载中...</div>
+                </div>
+            </div>
+        </div>
+
+        <!-- 查询探索器 -->
+        <div class="page-content" id="query-explorer">
+            <h2 class="page-title">查询探索器</h2>
+            <p class="page-description">在线执行SQL查询，探索数据内容</p>
+
+            <div class="feature-section">
+                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 20px;">
+                    <div>
+                        <h4>选择数据源</h4>
+                        <select class="filter-select" id="query-source-select" onchange="loadDatabases()" style="width: 100%; margin-bottom: 10px;">
+                            <option value="">选择数据源...</option>
+                        </select>
+                        <select class="filter-select" id="query-database-select" onchange="loadTables()" style="width: 100%; margin-bottom: 10px;">
+                            <option value="">选择数据库...</option>
+                        </select>
+                        <select class="filter-select" id="query-table-select" onchange="previewTableSchema()" style="width: 100%;">
+                            <option value="">选择表...</option>
+                        </select>
+                    </div>
+                    <div>
+                        <h4>表结构预览</h4>
+                        <div id="schema-preview" style="max-height: 200px; overflow-y: auto; border: 1px solid #ddd; border-radius: 5px; padding: 10px;">
+                            <p style="color: #666; text-align: center;">请先选择表</p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="feature-section">
+                <h4>SQL查询</h4>
+                <textarea id="sql-editor" style="width: 100%; height: 150px; font-family: 'Courier New', monospace; border: 1px solid #ddd; border-radius: 5px; padding: 10px;" placeholder="输入SQL查询语句..."></textarea>
+                <div style="margin-top: 10px;">
+                    <button class="btn btn-primary" onclick="executeQuery()">▶️ 执行查询</button>
+                    <button class="btn btn-secondary" onclick="clearQuery()">🗑️ 清空</button>
+                    <label style="margin-left: 20px;">
+                        限制行数: <input type="number" id="query-limit" value="100" min="1" max="1000" style="width: 80px; margin-left: 5px;">
+                    </label>
+                </div>
+            </div>
+
+            <div class="feature-section" id="query-results-section" style="display: none;">
+                <h4>查询结果</h4>
+                <div id="query-results">
+                    <!-- 查询结果将在这里显示 -->
+                </div>
+            </div>
+        </div>
     </div>
 </div>
-
+<div id="addSourceModal" class="modal">
+    <div class="modal-content">
+        <div class="modal-header">
+            <h3 class="modal-title">添加数据源</h3>
+            <span class="close" onclick="closeAddSourceModal()">&times;</span>
+        </div>
+        <form id="addSourceForm">
+            <div class="form-group">
+                <label for="sourceName">数据源名称</label>
+                <input type="text" id="sourceName" name="name" required>
+            </div>
+            <div class="form-group">
+                <label for="sourceType">数据库类型</label>
+                <select id="sourceType" name="type" required onchange="updateConfigFields()">
+                    <option value="">选择类型...</option>
+                </select>
+            </div>
+            <div id="configFields">
+                <!-- 配置字段将动态生成 -->
+            </div>
+            <div class="form-group">
+                <label for="sourceDescription">描述</label>
+                <textarea id="sourceDescription" name="description" rows="3"></textarea>
+            </div>
+            <div style="text-align: right; margin-top: 20px;">
+                <button type="button" class="btn btn-secondary" onclick="closeAddSourceModal()">取消</button>
+                <button type="submit" class="btn btn-primary">添加并测试连接</button>
+            </div>
+        </form>
+    </div>
+</div>
 <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
 <script>
     // API配置
@@ -2117,6 +2402,375 @@
         });
     }
 
+    // 数据集成相关API请求
+    async function loadIntegrationOverview() {
+        const overview = await fetchAPI('/integration/');
+        if (overview && overview.data) {
+            const statsContainer = document.getElementById('integration-stats');
+            statsContainer.innerHTML = `
+                <div class="stat-card">
+                    <div class="stat-header">
+                        <span class="stat-title">数据源总数</span>
+                        <div class="stat-icon">🔌</div>
+                    </div>
+                    <div class="stat-value">${overview.data.total_sources}</div>
+                    <div class="stat-change ${overview.data.active_connections === overview.data.total_sources ? 'positive' : 'warning'}">
+                        <span>活跃: ${overview.data.active_connections}/${overview.data.total_sources}</span>
+                    </div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-header">
+                        <span class="stat-title">支持的数据库类型</span>
+                        <div class="stat-icon">🗄️</div>
+                    </div>
+                    <div class="stat-value">${overview.data.supported_types.length}</div>
+                    <div class="stat-change positive">
+                        <span>类型丰富</span>
+                    </div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-header">
+                        <span class="stat-title">健康状态</span>
+                        <div class="stat-icon">💚</div>
+                    </div>
+                    <div class="stat-value">${overview.data.health_status}</div>
+                    <div class="stat-change positive">
+                        <span>系统正常</span>
+                    </div>
+                </div>
+            `;
+        }
+
+        // 加载连接状态
+        const sources = await fetchAPI('/integration/sources');
+        if (sources && sources.data) {
+            const statusContainer = document.getElementById('connection-status-grid');
+            statusContainer.innerHTML = `
+                <div class="cluster-grid">
+                    ${sources.data.sources.slice(0, 8).map(source => `
+                        <div class="cluster-item">
+                            <div class="cluster-name">${source.name}</div>
+                            <div class="cluster-status-text">${source.type.toUpperCase()}</div>
+                            <div class="cluster-metrics">
+                                <span style="color: ${source.status === 'connected' ? '#28a745' : '#dc3545'}">
+                                    ${source.status === 'connected' ? '✅ 已连接' : '❌ 断开'}
+                                </span>
+                            </div>
+                        </div>
+                    `).join('')}
+                </div>
+            `;
+        }
+    }
+
+    async function loadDataSources() {
+        const sources = await fetchAPI('/integration/sources');
+        const types = await fetchAPI('/integration/types');
+
+        // 填充类型过滤器
+        if (types && types.data) {
+            const typeFilter = document.getElementById('source-type-filter');
+            typeFilter.innerHTML = '<option value="">全部类型</option>' +
+                types.data.supported_types.map(type =>
+                    `<option value="${type.type}">${type.name}</option>`
+                ).join('');
+        }
+
+        // 显示数据源
+        if (sources && sources.data) {
+            const sourcesContainer = document.getElementById('sources-grid');
+            sourcesContainer.innerHTML = sources.data.sources.map(source => `
+                <div class="source-card">
+                    <div class="source-status-indicator ${source.status === 'disconnected' ? 'disconnected' : ''}"></div>
+                    <div class="source-header">
+                        <span class="source-name">${source.name}</span>
+                        <span class="source-type">
+                            <i class="fas fa-database"></i>
+                            ${source.type.toUpperCase()}
+                        </span>
+                    </div>
+                    <div class="source-details">
+                        <div class="source-detail-item">
+                            <i class="fas fa-server"></i>
+                            <span>${source.host || 'N/A'}:${source.port || 'N/A'}</span>
+                        </div>
+                        <div class="source-detail-item">
+                            <i class="fas fa-database"></i>
+                            <span>${source.database || 'default'}</span>
+                        </div>
+                        <div class="source-detail-item">
+                            <i class="fas fa-table"></i>
+                            <span>${source.tables_count || 0} 张表</span>
+                        </div>
+                        <div class="source-detail-item">
+                            <i class="fas fa-clock"></i>
+                            <span>${formatDateTime(source.last_test)}</span>
+                        </div>
+                        <div class="source-detail-item">
+                            <i class="fas fa-${source.status === 'connected' ? 'check-circle' : 'times-circle'}"></i>
+                            <span style="color: ${source.status === 'connected' ? '#28a745' : '#dc3545'}">
+                                ${source.status === 'connected' ? '连接正常' : '连接失败'}
+                            </span>
+                        </div>
+                    </div>
+                    <div class="source-actions">
+                        <button class="action-btn" onclick="testConnection('${source.name}')">🔧 测试</button>
+                        <button class="action-btn" onclick="viewSourceTables('${source.name}')">📋 表列表</button>
+                        <button class="action-btn" onclick="previewSource('${source.name}')">👁️ 预览</button>
+                        <button class="action-btn" onclick="editSource('${source.name}')">✏️ 编辑</button>
+                        <button class="action-btn" style="color: #dc3545;" onclick="deleteSource('${source.name}')">🗑️ 删除</button>
+                    </div>
+                </div>
+            `).join('');
+        }
+    }
+
+    // Excel集成功能
+    async function loadExcelIntegration() {
+        const files = await fetchAPI('/integration/sources/excel/files');
+        if (files && files.data) {
+            const excelContainer = document.getElementById('excel-sources');
+            excelContainer.innerHTML = files.data.files.map(file => `
+                <div class="source-card">
+                    <div class="source-header">
+                        <span class="source-name">${file.filename}</span>
+                        <span class="source-type">
+                            <i class="fas fa-file-excel"></i>
+                            EXCEL
+                        </span>
+                    </div>
+                    <div class="source-details">
+                        <div class="source-detail-item">
+                            <i class="fas fa-hdd"></i>
+                            <span>${(file.size / 1024 / 1024).toFixed(2)} MB</span>
+                        </div>
+                        <div class="source-detail-item">
+                            <i class="fas fa-calendar"></i>
+                            <span>上传: ${formatDateTime(file.modified_time)}</span>
+                        </div>
+                    </div>
+                    <div class="source-actions">
+                        <button class="action-btn" onclick="previewExcelFile('${file.filename}')">👁️ 预览</button>
+                        <button class="action-btn" onclick="downloadExcelFile('${file.filename}')">💾 下载</button>
+                        <button class="action-btn" style="color: #dc3545;" onclick="deleteExcelFile('${file.filename}')">🗑️ 删除</button>
+                    </div>
+                </div>
+            `).join('');
+        }
+    }
+
+    // 查询探索器功能
+    async function loadQueryExplorer() {
+        const sources = await fetchAPI('/integration/sources');
+        if (sources && sources.data) {
+            const sourceSelect = document.getElementById('query-source-select');
+            sourceSelect.innerHTML = '<option value="">选择数据源...</option>' +
+                sources.data.sources.filter(s => s.status === 'connected').map(source =>
+                    `<option value="${source.name}">${source.name} (${source.type})</option>`
+                ).join('');
+        }
+    }
+
+    async function loadDatabases() {
+        const sourceName = document.getElementById('query-source-select').value;
+        if (!sourceName) return;
+
+        const databases = await fetchAPI(`/integration/sources/${sourceName}/databases`);
+        const dbSelect = document.getElementById('query-database-select');
+
+        if (databases && databases.data && databases.data.success) {
+            dbSelect.innerHTML = '<option value="">选择数据库...</option>' +
+                databases.data.databases.map(db => `<option value="${db}">${db}</option>`).join('');
+            dbSelect.disabled = false;
+        } else {
+            dbSelect.innerHTML = '<option value="">无可用数据库</option>';
+            dbSelect.disabled = true;
+        }
+
+        // 清空表选择
+        document.getElementById('query-table-select').innerHTML = '<option value="">选择表...</option>';
+    }
+
+    async function loadTables() {
+        const sourceName = document.getElementById('query-source-select').value;
+        const database = document.getElementById('query-database-select').value;
+        if (!sourceName) return;
+
+        const tables = await fetchAPI(`/integration/sources/${sourceName}/tables${database ? `?database=${database}` : ''}`);
+        const tableSelect = document.getElementById('query-table-select');
+
+        if (tables && tables.data && tables.data.success) {
+            tableSelect.innerHTML = '<option value="">选择表...</option>' +
+                tables.data.tables.map(table => `<option value="${table.table_name}">${table.table_name}</option>`).join('');
+            tableSelect.disabled = false;
+        } else {
+            tableSelect.innerHTML = '<option value="">无可用表</option>';
+            tableSelect.disabled = true;
+        }
+    }
+
+    async function previewTableSchema() {
+        const sourceName = document.getElementById('query-source-select').value;
+        const database = document.getElementById('query-database-select').value;
+        const tableName = document.getElementById('query-table-select').value;
+
+        if (!sourceName || !tableName) return;
+
+        const schema = await fetchAPI(`/integration/sources/${sourceName}/tables/${tableName}/schema${database ? `?database=${database}` : ''}`);
+        const preview = document.getElementById('schema-preview');
+
+        if (schema && schema.data && schema.data.success) {
+            const columns = schema.data.schema.columns || [];
+            preview.innerHTML = `
+                <table style="width: 100%; font-size: 12px;">
+                    <thead>
+                        <tr style="background: #f8f9fa;">
+                            <th style="padding: 5px;">列名</th>
+                            <th style="padding: 5px;">类型</th>
+                            <th style="padding: 5px;">可空</th>
+                            <th style="padding: 5px;">备注</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        ${columns.map(col => `
+                            <tr>
+                                <td style="padding: 5px;">${col.name}</td>
+                                <td style="padding: 5px;">${col.type}</td>
+                                <td style="padding: 5px;">${col.nullable ? '是' : '否'}</td>
+                                <td style="padding: 5px;">${col.comment || '-'}</td>
+                            </tr>
+                        `).join('')}
+                    </tbody>
+                </table>
+            `;
+        } else {
+            preview.innerHTML = '<p style="color: #dc3545; text-align: center;">获取表结构失败</p>';
+        }
+    }
+
+    async function executeQuery() {
+        const sourceName = document.getElementById('query-source-select').value;
+        const database = document.getElementById('query-database-select').value;
+        const query = document.getElementById('sql-editor').value.trim();
+        const limit = document.getElementById('query-limit').value;
+
+        if (!sourceName || !query) {
+            alert('请选择数据源并输入SQL查询');
+            return;
+        }
+
+        const resultsSection = document.getElementById('query-results-section');
+        const resultsContainer = document.getElementById('query-results');
+
+        resultsContainer.innerHTML = '<div class="loading">执行中...</div>';
+        resultsSection.style.display = 'block';
+
+        try {
+            const response = await fetch(`${API_BASE}/integration/sources/${sourceName}/query`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({
+                    query: query,
+                    database: database,
+                    limit: parseInt(limit)
+                })
+            });
+
+            const result = await response.json();
+
+            if (result.data && result.data.success) {
+                const results = result.data.results;
+                const rowCount = result.data.row_count;
+                const executionTime = result.data.execution_time_ms;
+
+                if (results.length > 0) {
+                    const columns = Object.keys(results[0]);
+                    resultsContainer.innerHTML = `
+                        <div style="margin-bottom: 10px; color: #666; font-size: 14px;">
+                            查询成功 - 返回 ${rowCount} 行，耗时 ${executionTime}ms
+                        </div>
+                        <div class="query-results-table">
+                            <table>
+                                <thead>
+                                    <tr>
+                                        ${columns.map(col => `<th>${col}</th>`).join('')}
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    ${results.map(row => `
+                                        <tr>
+                                            ${columns.map(col => `<td>${row[col] || ''}</td>`).join('')}
+                                        </tr>
+                                    `).join('')}
+                                </tbody>
+                            </table>
+                        </div>
+                    `;
+                } else {
+                    resultsContainer.innerHTML = '<p style="text-align: center; color: #666;">查询成功，但没有返回数据</p>';
+                }
+            } else {
+                resultsContainer.innerHTML = `<div class="alert alert-error">${result.data?.error || '查询执行失败'}</div>`;
+            }
+        } catch (error) {
+            resultsContainer.innerHTML = `<div class="alert alert-error">查询执行失败: ${error.message}</div>`;
+        }
+    }
+
+    function clearQuery() {
+        document.getElementById('sql-editor').value = '';
+        document.getElementById('query-results-section').style.display = 'none';
+    }
+
+    // Excel文件上传处理
+    function handleExcelUpload(input) {
+        const file = input.files[0];
+        if (!file) return;
+
+        const formData = new FormData();
+        formData.append('file', file);
+        formData.append('name', file.name.replace(/\.[^/.]+$/, "")); // 移除扩展名作为数据源名称
+        formData.append('description', `Excel文件: ${file.name}`);
+
+        // 显示上传进度
+        const uploadArea = document.getElementById('excel-upload-area');
+        uploadArea.innerHTML = '<div class="loading">上传中...</div>';
+
+        fetch(`${API_BASE}/integration/sources/excel/upload`, {
+            method: 'POST',
+            body: formData
+        })
+        .then(response => response.json())
+        .then(result => {
+            if (result.success) {
+                alert('Excel文件上传成功！');
+                loadExcelIntegration(); // 重新加载Excel列表
+            } else {
+                alert(`上传失败: ${result.message}`);
+            }
+            // 重置上传区域
+            uploadArea.innerHTML = `
+                <div class="upload-zone" onclick="document.getElementById('excel-file-input').click()">
+                    <i class="fas fa-cloud-upload-alt" style="font-size: 48px; color: #1e3c72; margin-bottom: 10px;"></i>
+                    <p>点击或拖拽Excel文件到这里</p>
+                    <p style="font-size: 12px; color: #666;">支持 .xlsx, .xls 格式，最大50MB</p>
+                </div>
+            `;
+        })
+        .catch(error => {
+            alert(`上传失败: ${error.message}`);
+            uploadArea.innerHTML = `
+                <div class="upload-zone" onclick="document.getElementById('excel-file-input').click()">
+                    <i class="fas fa-cloud-upload-alt" style="font-size: 48px; color: #1e3c72; margin-bottom: 10px;"></i>
+                    <p>点击或拖拽Excel文件到这里</p>
+                    <p style="font-size: 12px; color: #666;">支持 .xlsx, .xls 格式，最大50MB</p>
+                </div>
+            `;
+        });
+    }
+
     // 任务操作函数
     function viewTaskDetails(taskName) {
         alert(`查看任务详情: ${taskName}`);
@@ -2134,6 +2788,247 @@
         console.log('搜索:', searchValue, '过滤:', filterValue);
     }
 
+    // Modal management functions
+    function showAddSourceModal() {
+        const modal = document.getElementById('addSourceModal');
+        modal.style.display = 'block';
+        loadSupportedTypes(); // Load database types when opening modal
+    }
+
+    function closeAddSourceModal() {
+        const modal = document.getElementById('addSourceModal');
+        modal.style.display = 'none';
+        document.getElementById('addSourceForm').reset();
+    }
+
+    async function loadSupportedTypes() {
+        const types = await fetchAPI('/integration/types');
+        if (types && types.data) {
+            const typeSelect = document.getElementById('sourceType');
+            typeSelect.innerHTML = '<option value="">选择类型...</option>' +
+                types.data.supported_types.map(type =>
+                    `<option value="${type.type}">${type.name}</option>`
+                ).join('');
+        }
+    }
+
+    function updateConfigFields() {
+        const selectedType = document.getElementById('sourceType').value;
+        const configContainer = document.getElementById('configFields');
+
+        if (!selectedType) {
+            configContainer.innerHTML = '';
+            return;
+        }
+
+        // Generate config fields based on database type
+        const commonFields = `
+            <div class="form-group">
+                <label for="configHost">主机地址</label>
+                <input type="text" id="configHost" name="host" required>
+            </div>
+            <div class="form-group">
+                <label for="configPort">端口</label>
+                <input type="number" id="configPort" name="port" required>
+            </div>
+            <div class="form-group">
+                <label for="configUsername">用户名</label>
+                <input type="text" id="configUsername" name="username" required>
+            </div>
+            <div class="form-group">
+                <label for="configPassword">密码</label>
+                <input type="password" id="configPassword" name="password">
+            </div>
+            <div class="form-group">
+                <label for="configDatabase">数据库名</label>
+                <input type="text" id="configDatabase" name="database">
+            </div>
+        `;
+
+        configContainer.innerHTML = commonFields;
+
+        // Set default ports based on database type
+        const defaultPorts = {
+            'mysql': 3306,
+            'kingbase': 54321,
+            'doris': 9030,
+            'dameng': 5236,
+            'gbase': 5432,
+            'tidb': 4000,
+            'hive': 10000
+        };
+
+        if (defaultPorts[selectedType]) {
+            document.getElementById('configPort').value = defaultPorts[selectedType];
+        }
+    }
+
+    // Data source action functions
+    async function testConnection(sourceName) {
+        try {
+            const result = await fetchAPI(`/integration/sources/${sourceName}/test`);
+            if (result && result.data && result.data.success) {
+                alert(`连接测试成功！\n数据库类型: ${result.data.database_type}\n版本: ${result.data.version}`);
+            } else {
+                alert(`连接测试失败: ${result.data?.error || '未知错误'}`);
+            }
+        } catch (error) {
+            alert(`连接测试失败: ${error.message}`);
+        }
+    }
+
+    async function viewSourceTables(sourceName) {
+        try {
+            const result = await fetchAPI(`/integration/sources/${sourceName}/tables`);
+            if (result && result.data && result.data.success) {
+                const tables = result.data.tables;
+                const tableList = tables.map(t => `• ${t.table_name} (${t.estimated_rows || 0} 行)`).join('\n');
+                alert(`数据源 ${sourceName} 的表列表:\n\n${tableList}`);
+            } else {
+                alert(`获取表列表失败: ${result.data?.error || '未知错误'}`);
+            }
+        } catch (error) {
+            alert(`获取表列表失败: ${error.message}`);
+        }
+    }
+
+    async function previewSource(sourceName) {
+        try {
+            const result = await fetchAPI(`/integration/sources/${sourceName}/preview?limit=5`);
+            if (result && result.data && result.data.success) {
+                alert(`数据预览成功！\n表名: ${result.data.table_name}\n预览行数: ${result.data.row_count}`);
+            } else {
+                alert(`数据预览失败: ${result.data?.error || '未知错误'}`);
+            }
+        } catch (error) {
+            alert(`数据预览失败: ${error.message}`);
+        }
+    }
+
+    function editSource(sourceName) {
+        alert(`编辑数据源功能开发中: ${sourceName}`);
+    }
+
+    async function deleteSource(sourceName) {
+        if (!confirm(`确定要删除数据源 "${sourceName}" 吗？此操作不可恢复。`)) {
+            return;
+        }
+
+        try {
+            const response = await fetch(`${API_BASE}/integration/sources/${sourceName}`, {
+                method: 'DELETE'
+            });
+            const result = await response.json();
+
+            if (result.success) {
+                alert(`数据源 "${sourceName}" 删除成功！`);
+                loadDataSources(); // Reload the sources list
+            } else {
+                alert(`删除失败: ${result.message}`);
+            }
+        } catch (error) {
+            alert(`删除失败: ${error.message}`);
+        }
+    }
+
+    async function batchTestConnections() {
+        const sources = await fetchAPI('/integration/sources');
+        if (!sources || !sources.data) return;
+
+        const sourceNames = sources.data.sources.map(s => s.name);
+        if (sourceNames.length === 0) {
+            alert('没有可测试的数据源');
+            return;
+        }
+
+        try {
+            const response = await fetch(`${API_BASE}/integration/batch/test`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify(sourceNames)
+            });
+
+            const result = await response.json();
+            if (result.data) {
+                alert(`批量测试完成！\n成功: ${result.data.successful}/${result.data.total_tested}\n成功率: ${result.data.success_rate}%`);
+                loadDataSources(); // Reload to show updated status
+            }
+        } catch (error) {
+            alert(`批量测试失败: ${error.message}`);
+        }
+    }
+
+    // Excel functions
+    function previewExcelFile(filename) {
+        alert(`预览Excel文件功能开发中: ${filename}`);
+    }
+
+    function downloadExcelFile(filename) {
+        alert(`下载Excel文件功能开发中: ${filename}`);
+    }
+
+    function deleteExcelFile(filename) {
+        if (confirm(`确定要删除文件 "${filename}" 吗？`)) {
+            alert(`删除Excel文件功能开发中: ${filename}`);
+        }
+    }
+
+    // Form submission handler
+    document.addEventListener('DOMContentLoaded', function() {
+        // Add form submission handler
+        const addSourceForm = document.getElementById('addSourceForm');
+        if (addSourceForm) {
+            addSourceForm.addEventListener('submit', async function(e) {
+                e.preventDefault();
+
+                const formData = new FormData(this);
+                const sourceData = {
+                    name: formData.get('name'),
+                    type: formData.get('type'),
+                    config: {
+                        host: formData.get('host'),
+                        port: parseInt(formData.get('port')),
+                        username: formData.get('username'),
+                        password: formData.get('password'),
+                        database: formData.get('database')
+                    },
+                    description: formData.get('description')
+                };
+
+                try {
+                    const response = await fetch(`${API_BASE}/integration/sources`, {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json',
+                        },
+                        body: JSON.stringify(sourceData)
+                    });
+
+                    const result = await response.json();
+                    if (result.success) {
+                        alert(`数据源 "${sourceData.name}" 添加成功！`);
+                        closeAddSourceModal();
+                        loadDataSources(); // Reload sources list
+                    } else {
+                        alert(`添加失败: ${result.message}`);
+                    }
+                } catch (error) {
+                    alert(`添加失败: ${error.message}`);
+                }
+            });
+        }
+
+        // Close modal when clicking outside
+        window.addEventListener('click', function(event) {
+            const modal = document.getElementById('addSourceModal');
+            if (event.target === modal) {
+                closeAddSourceModal();
+            }
+        });
+    });
+
     // 页面切换功能
     document.addEventListener('DOMContentLoaded', function() {
         // 获取所有导航链接
@@ -2142,6 +3037,47 @@
         const pageContents = document.querySelectorAll('.page-content');
         const sidebar = document.querySelector('.sidebar');
         const toggleBtn = document.querySelector('.toggle-sidebar');
+        // Add this to your DOMContentLoaded event
+        const uploadZone = document.querySelector('.upload-zone');
+        if (uploadZone) {
+            ['dragenter', 'dragover', 'dragleave', 'drop'].forEach(eventName => {
+                uploadZone.addEventListener(eventName, preventDefaults, false);
+            });
+
+            function preventDefaults(e) {
+                e.preventDefault();
+                e.stopPropagation();
+            }
+
+            ['dragenter', 'dragover'].forEach(eventName => {
+                uploadZone.addEventListener(eventName, highlight, false);
+            });
+
+            ['dragleave', 'drop'].forEach(eventName => {
+                uploadZone.addEventListener(eventName, unhighlight, false);
+            });
+
+            function highlight(e) {
+                uploadZone.classList.add('dragover');
+            }
+
+            function unhighlight(e) {
+                uploadZone.classList.remove('dragover');
+            }
+
+            uploadZone.addEventListener('drop', handleDrop, false);
+
+            function handleDrop(e) {
+                const dt = e.dataTransfer;
+                const files = dt.files;
+
+                if (files.length > 0) {
+                    const fileInput = document.getElementById('excel-file-input');
+                    fileInput.files = files;
+                    handleExcelUpload(fileInput);
+                }
+            }
+        }
 
         // 为每个导航链接添加点击事件
         navLinks.forEach(link => {
@@ -2183,6 +3119,18 @@
                             case 'governance':
                                 await loadGovernance();
                                 break;
+                            case 'integration-overview':
+                                await loadIntegrationOverview();
+                                break;
+                            case 'data-sources':
+                                await loadDataSources();
+                                break;
+                            case 'excel-integration':
+                                await loadExcelIntegration();
+                                break;
+                            case 'query-explorer':
+                                await loadQueryExplorer();
+                                break;
                         }
                     }
                 }
@@ -2223,6 +3171,18 @@
                         break;
                     case 'governance':
                         await loadGovernance();
+                        break;
+                    case 'integration-overview':
+                        await loadIntegrationOverview();
+                        break;
+                    case 'data-sources':
+                        await loadDataSources();
+                        break;
+                    case 'excel-integration':
+                        await loadExcelIntegration();
+                        break;
+                    case 'query-explorer':
+                        await loadQueryExplorer();
                         break;
                 }
 
