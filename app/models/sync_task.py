@@ -5,10 +5,12 @@
 
 from datetime import datetime
 from typing import Optional
-from sqlalchemy import Column, String, Integer, Text, Boolean, DateTime, JSON, ForeignKey, Float
+from sqlalchemy import Column, String, Integer, Text, Boolean, DateTime, JSON, ForeignKey, Float, Index
 from sqlalchemy.orm import relationship
 from sqlalchemy.dialects.mysql import LONGTEXT
 from .base import BaseModel
+
+
 
 
 class SyncTask(BaseModel):
@@ -241,5 +243,5 @@ class SyncTemplate(BaseModel):
     created_by = Column(String(100), nullable=True, comment="创建者")
 
 
-# 需要在 app/models/__init__.py 中添加新模型的导入
-from sqlalchemy import Index
+# # 需要在 app/models/__init__.py 中添加新模型的导入
+# from sqlalchemy import Index
