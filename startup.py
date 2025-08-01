@@ -22,6 +22,47 @@ from loguru import logger
 from config.settings import settings
 
 
+def check_datax_installation():
+    """检查DataX是否正确安装"""
+    import os
+    import subprocess
+
+    datax_home = os.environ.get('DATAX_HOME', '/opt/datax')
+    datax_script = os.path.join(datax_home, 'bin', 'datax.py')
+
+    logger.info("🔍 Checking DataX installation...")
+
+    if not os.path.exists(datax_script):
+        logger.warning(f"⚠️ DataX not found at {datax_script}")
+        logger.info("💡 Please ensure DataX is properly installed in ./datax directory")
+        return False
+
+    # 检查DataX脚本权限
+    if not os.access(datax_script, os.X_OK):
+        logger.warning(f"⚠️ DataX script not executable: {datax_script}")
+        try:
+            os.chmod(datax_script, 0o755)
+            logger.info("✅  Fixed DataX script permissions")
+        except Exception as e:
+            logger.error(f"❌  Failed to fix DataX permissions: {e}")
+            return False
+
+    # 检查Java环境
+    try:
+        result = subprocess.run(['java', '-version'],
+                                capture_output=True, text=True, timeout=10)
+        if result.returncode == 0:
+            java_version = result.stderr.split('\n')[0] if result.stderr else "Unknown"
+            logger.info(f" Java version check passed: {java_version}")
+        else:
+            logger.error("❌  Java version check failed")
+            return False
+    except Exception as e:
+        logger.error(f"❌  Java check failed: {e}")
+        return False
+
+    logger.info("✅  DataX installation check passed")
+    return True
 def setup_production_logging():
     """Setup cross-platform production logging configuration."""
 
