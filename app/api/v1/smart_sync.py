@@ -336,126 +336,50 @@ async def get_sync_templates():
         raise HTTPException(status_code=500, detail=f"获取同步模板失败: {str(e)}")
 
 
-@router.post("/apply-template", summary="应用同步模板")
-async def apply_sync_template(
-        template_id: str = Body(..., description="模板ID"),
-        source_name: str = Body(..., description="源数据源名称"),
-        target_name: str = Body(..., description="目标数据源名称"),
-        custom_tables: Optional[List[str]] = Body(None, description="自定义表列表")
-):
-    """应用同步模板，快速生成同步配置"""
-    try:
-        # 获取模板信息
-        templates_response = await get_sync_templates()
-        templates = templates_response.data["templates"]
-        template = next((t for t in templates if t["id"] == template_id), None)
-
-        if not template:
-            raise HTTPException(status_code=404, detail="同步模板不存在")
-
-        # 获取源数据源的表列表
-        tables_result = await smart_sync_service.integration_service.get_tables(source_name)
-        if not tables_result.get('success'):
-            raise HTTPException(status_code=400, detail="无法获取源数据源表列表")
-
-        available_tables = [t.get('table_name', t.get('name', '')) for t in tables_result.get('tables', [])]
-
-        # 确定要同步的表
-        if custom_tables:
-            sync_tables = [t for t in custom_tables if t in available_tables]
-        else:
-            # 使用模板推荐的表（如果存在）
-            recommended_tables = template.get('common_tables', [])
-            sync_tables = [t for t in recommended_tables if t in available_tables]
-
-            # 如果推荐表都不存在，使用前5个可用表
-            if not sync_tables:
-                sync_tables = available_tables[:5]
-
-        if not sync_tables:
-            raise HTTPException(status_code=400, detail="没有找到可同步的表")
-
-        # 生成同步请求
-        sync_request = SmartSyncRequest(
-            source_name=source_name,
-            target_name=target_name,
-            tables=[
-                TableSyncRequest(source_table=table, target_table=table)
-                for table in sync_tables
-            ],
-            sync_mode=template["recommended_settings"]["sync_mode"],
-            auto_create_tables=template["recommended_settings"]["auto_create_tables"],
-            parallel_jobs=template["recommended_settings"]["parallel_jobs"]
-        )
-
-        # 分析同步计划
-        analysis_result = await smart_sync_service.analyze_sync_plan({
-            "source_name": sync_request.source_name,
-            "target_name": sync_request.target_name,
-            "tables": [
-                {"source_table": t.source_table, "target_table": t.target_table}
-                for t in sync_request.tables
-            ],
-            "sync_mode": sync_request.sync_mode,
-            "auto_create_tables": sync_request.auto_create_tables,
-            "parallel_jobs": sync_request.parallel_jobs
-        })
-
-        return create_response(
-            data={
-                "template": template,
-                "applied_config": sync_request.dict(),
-                "analysis_result": analysis_result,
-                "selected_tables": sync_tables
-            },
-            message=f"成功应用模板: {template['name']}"
-        )
-
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"应用同步模板失败: {e}")
-        raise HTTPException(status_code=500, detail=f"应用同步模板失败: {str(e)}")
-
-
 @router.get("/history", summary="获取同步历史")
 async def get_sync_history(
-        limit: int = 20,
-        offset: int = 0,
-        source_name: Optional[str] = None,
-        target_name: Optional[str] = None
+        page: int = 1,
+        page_size: int = 20,
+        status: Optional[str] = None,
+        source_name: Optional[str] = None
 ):
-    """获取历史同步记录"""
+    """获取智能同步的历史记录"""
     try:
-        # 这里应该从数据库获取真实的历史记录
-        # 目前返回模拟数据
+        # 模拟历史记录数据
         mock_history = [
             {
-                "sync_id": f"smart_sync_{1640995200 + i}",
-                "source_name": "MySQL-Production",
-                "target_name": "Hive-Warehouse",
-                "tables_count": 3 + i,
-                "status": "completed" if i % 3 != 0 else "failed",
-                "start_time": datetime.now().replace(day=1 + i, hour=10 + i),
-                "end_time": datetime.now().replace(day=1 + i, hour=11 + i),
-                "duration_minutes": 45 + i * 5,
-                "synced_rows": (10000 + i * 5000),
-                "success_rate": 100 if i % 3 != 0 else 67
+                "sync_id": f"smart_sync_{1640000000 + i}",
+                "source_name": f"MySQL-{i % 3 + 1}",
+                "target_name": f"Hive-{i % 2 + 1}",
+                "status": ["completed", "failed", "running"][i % 3],
+                "start_time": datetime.now().replace(hour=i % 24, minute=i % 60),
+                "end_time": datetime.now().replace(hour=(i + 1) % 24, minute=(i + 10) % 60) if i % 3 != 2 else None,
+                "total_tables": i % 5 + 1,
+                "success_tables": i % 5 if i % 3 == 0 else (i % 5 + 1) // 2,
+                "total_records": (i + 1) * 10000,
+                "created_by": "用户A" if i % 2 == 0 else "用户B"
             }
-            for i in range(limit)
+            for i in range(50)
         ]
 
-        # 应用过滤器
+        # 应用过滤条件
+        if status:
+            mock_history = [h for h in mock_history if h['status'] == status]
         if source_name:
-            mock_history = [h for h in mock_history if h['source_name'] == source_name]
-        if target_name:
-            mock_history = [h for h in mock_history if h['target_name'] == target_name]
+            mock_history = [h for h in mock_history if source_name.lower() in h['source_name'].lower()]
+
+        # 分页
+        total = len(mock_history)
+        offset = (page - 1) * page_size
+        paginated_history = mock_history[offset:offset + page_size]
 
         return create_response(
             data={
-                "history": mock_history[offset:offset + limit],
-                "total": len(mock_history),
-                "has_more": offset + limit < len(mock_history)
+                "history": paginated_history,
+                "total": total,
+                "page": page,
+                "page_size": page_size,
+                "has_more": offset + page_size < total
             },
             message="获取同步历史成功"
         )

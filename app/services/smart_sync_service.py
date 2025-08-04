@@ -232,36 +232,32 @@ class SmartSyncService:
 
             columns.append(f"    {col_name} {col_type} {nullable}")
 
+        # 🔧 修复：先定义换行符变量，避免在f-string中使用反斜杠
+        newline = '\n'
+        column_definitions = f',{newline}'.join(columns)
+
         if target_type == 'mysql':
-            sql = f"""
-CREATE TABLE IF NOT EXISTS {table_name} (
-{',\n'.join(columns)}
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
-            """.strip()
+            sql = f"""CREATE TABLE IF NOT EXISTS {table_name} (
+    {column_definitions}
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;""".strip()
 
         elif target_type == 'postgresql':
-            sql = f"""
-CREATE TABLE IF NOT EXISTS {table_name} (
-{',\n'.join(columns)}
-);
-            """.strip()
+            sql = f"""CREATE TABLE IF NOT EXISTS {table_name} (
+    {column_definitions}
+    );""".strip()
 
         elif target_type == 'hive':
-            sql = f"""
-CREATE TABLE IF NOT EXISTS {table_name} (
-{',\n'.join(columns)}
-) 
-STORED AS TEXTFILE
-LOCATION '/user/hive/warehouse/{table_name}';
-            """.strip()
+            sql = f"""CREATE TABLE IF NOT EXISTS {table_name} (
+    {column_definitions}
+    ) 
+    STORED AS TEXTFILE
+    LOCATION '/user/hive/warehouse/{table_name}';""".strip()
 
         else:
             # 通用SQL
-            sql = f"""
-CREATE TABLE IF NOT EXISTS {table_name} (
-{',\n'.join(columns)}
-);
-            """.strip()
+            sql = f"""CREATE TABLE IF NOT EXISTS {table_name} (
+    {column_definitions}
+    );""".strip()
 
         return sql
 
