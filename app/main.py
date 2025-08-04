@@ -130,30 +130,6 @@ async def lifespan(app: FastAPI):
     logger.info("👋 Application shutdown completed")
 
 
-@app.on_event("startup")
-async def startup_event():
-    """应用启动事件"""
-    logger.info("🚀 Starting Big Data Platform API...")
-
-    # 🔧 强制执行数据库初始化
-    try:
-        from app.utils.database import create_tables, test_connection
-
-        logger.info("🔍 测试数据库连接...")
-        if test_connection():
-            logger.info("✅ 数据库连接成功")
-
-            logger.info("🏗️ 开始创建数据库表...")
-            create_tables()
-            logger.info("✅ 数据库表创建完成")
-        else:
-            logger.error("❌ 数据库连接失败")
-            # 不要raise，让应用继续启动
-
-    except Exception as e:
-        logger.error(f"❌ 数据库初始化失败: {e}")
-        import traceback
-        logger.error(traceback.format_exc())
 
 async def warm_critical_cache():
     """预热关键缓存"""

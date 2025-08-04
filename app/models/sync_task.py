@@ -5,12 +5,10 @@
 
 from datetime import datetime
 from typing import Optional
-from sqlalchemy import Column, String, Integer, Text, Boolean, DateTime, JSON, ForeignKey, Float, Index
+from sqlalchemy import Column, String, Integer, Text, Boolean, DateTime, JSON, ForeignKey, Float
 from sqlalchemy.orm import relationship
 from sqlalchemy.dialects.mysql import LONGTEXT
 from .base import BaseModel
-
-
 
 
 class SyncTask(BaseModel):
@@ -204,12 +202,8 @@ class DataSourceMetadata(BaseModel):
     # 关系
     data_source = relationship("DataSource")
 
-    # 添加唯一约束
-    __table_args__ = (
-        Index('idx_metadata_unique', 'data_source_id', 'database_name', 'table_name', unique=True),
-        Index('idx_metadata_collected', 'last_collected'),
-        Index('idx_metadata_stale', 'is_stale'),
-    )
+    # 注意：原本的Index定义已移除，避免导入问题
+    # 如需索引，可在数据库层面手动创建或稍后用__table_args__方式添加
 
 
 class SyncTemplate(BaseModel):
@@ -241,7 +235,3 @@ class SyncTemplate(BaseModel):
 
     # 创建者
     created_by = Column(String(100), nullable=True, comment="创建者")
-
-
-# # 需要在 app/models/__init__.py 中添加新模型的导入
-# from sqlalchemy import Index

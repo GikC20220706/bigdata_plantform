@@ -43,6 +43,24 @@ def get_engine_config():
     return config
 
 
+def get_sync_db_session():
+    """获取同步数据库会话 - 用于非异步上下文"""
+    from sqlalchemy import create_engine
+    from sqlalchemy.orm import sessionmaker
+    from config.settings import settings
+
+    # 创建同步引擎
+    sync_engine = create_engine(
+        settings.DATABASE_URL.replace('+aiomysql', '+pymysql'),  # 使用pymysql替代aiomysql
+        pool_pre_ping=True,
+        pool_recycle=300,
+        echo=False
+    )
+
+    # 创建会话
+    SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=sync_engine)
+    return SessionLocal()
+
 # 创建数据库引擎
 engine_config = get_engine_config()
 engine = create_engine(settings.DATABASE_URL, **engine_config)

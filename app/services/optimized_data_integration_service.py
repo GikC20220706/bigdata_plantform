@@ -43,28 +43,40 @@ class OptimizedDataIntegrationService:
         self._load_saved_connections()
 
     def _load_saved_connections(self):
-        """从数据库加载已保存的连接配置"""
+        """从数据库加载已保存的连接配置 - 使用同步数据库会话"""
         try:
-            db = next(get_db())
-            saved_sources = db.query(DataSource).filter(DataSource.is_active == True).all()
+            from app.utils.database import get_sync_db_session
+            from app.models.data_source import DataSource
+            import json
 
-            for source in saved_sources:
-                try:
-                    if source.connection_config:
-                        config = json.loads(source.connection_config) if isinstance(source.connection_config,
-                                                                                    str) else source.connection_config
-                        self.connection_manager.add_client(
-                            source.name,
-                            source.source_type,
-                            config
-                        )
-                        logger.info(f"加载已保存的数据源: {source.name}")
-                except Exception as e:
-                    logger.error(f"加载数据源 {source.name} 失败: {e}")
+            # 使用同步数据库会话
+            db = get_sync_db_session()
+            try:
+                saved_sources = db.query(DataSource).filter(DataSource.is_active == True).all()
+                loaded_count = 0
+                for source in saved_sources:
+                    try:
+                        if source.connection_config:
+                            config = json.loads(source.connection_config) if isinstance(
+                                source.connection_config, str) else source.connection_config
+                            self.connection_manager.add_client(
+                                source.name,
+                                source.source_type,
+                                config
+                            )
+                            logger.info(f"✅ 加载已保存的数据源: {source.name}")
+                            loaded_count += 1
+                    except Exception as e:
+                        logger.error(f"❌ 加载数据源 {source.name} 失败: {e}")
 
-            db.close()
+                logger.info(f"🎉 成功加载 {loaded_count} 个数据源连接配置")
+
+            finally:
+                db.close()
+
         except Exception as e:
-            logger.error(f"从数据库加载连接配置失败: {e}")
+            logger.error(f"❌ 从数据库加载连接配置失败: {e}")
+            logger.info("💡 将继续启动，但需要手动配置数据源连接")
 
     @cache_table_schema(ttl=1800)  # 30分钟缓存
     async def get_table_schema(self, source_name: str, table_name: str, database: str = None) -> Dict[str, Any]:
