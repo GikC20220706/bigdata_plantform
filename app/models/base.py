@@ -82,4 +82,3 @@ class BaseModel(Base, TimestampMixin):
     def __repr__(self) -> str:
         """String representation of the model."""
         return f"<{self.__class__.__name__}(id={self.id})>"
-Base = declarative_base()

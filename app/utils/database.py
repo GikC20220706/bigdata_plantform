@@ -11,6 +11,7 @@ from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker, Session
 from sqlalchemy.pool import QueuePool
 from config.settings import settings
+from sqlalchemy import create_engine, text
 
 
 # 根据数据库类型配置连接参数
@@ -87,39 +88,51 @@ def get_db() -> Generator[Session, None, None]:
         db.close()
 
 
-def create_tables():
-    """Create all database tables."""
+def create_tables_sync():
+    """Create all database tables - 完全同步版本"""
     try:
-        # 🔧 修复：导入所有模型以确保它们被注册
+        # 导入所有模型 - 确保模型被注册
         from app.models import (
-            Base,  # 确保导入Base
+            Base,
             Cluster, ClusterNode, ClusterMetric,
             DataSource, DataSourceConnection,
             TaskDefinition, TaskExecution, TaskSchedule,
-            BusinessSystem, BusinessSystemDataSource  # 添加业务系统模型
+            BusinessSystem, BusinessSystemDataSource,
+            # 添加新的同步任务模型
+            SyncTask, SyncTableMapping, SyncExecution, SyncTableResult,
+            DataSourceMetadata, SyncTemplate
         )
+        from sqlalchemy import text
 
-        # 🔧 添加调试信息
         logger.info("正在创建数据库表...")
         logger.info(f"发现 {len(Base.metadata.tables)} 个表需要创建")
 
-        # 创建所有表
-        Base.metadata.create_all(bind=engine)
+        # 打印所有将要创建的表名
+        table_names = list(Base.metadata.tables.keys())
+        logger.info(f"准备创建的表: {table_names}")
 
-        # 🔧 验证表是否创建成功
-        with engine.connect() as conn:
+        # 使用同步引擎创建表
+        sync_url = settings.DATABASE_URL.replace('+aiomysql', '+pymysql')
+        from sqlalchemy import create_engine
+        sync_engine = create_engine(sync_url, pool_pre_ping=True)
+
+        Base.metadata.create_all(bind=sync_engine)
+
+        # 验证表创建
+        with sync_engine.connect() as conn:
             if settings.is_mysql:
-                result = conn.execute("SHOW TABLES")
+                result = conn.execute(text("SHOW TABLES"))
                 tables = [row[0] for row in result.fetchall()]
-                logger.info(f"✅ 成功创建 {len(tables)} 个表: {tables}")
+                logger.info(f"成功创建 {len(tables)} 个表: {tables}")
             else:
-                result = conn.execute("SELECT name FROM sqlite_master WHERE type='table'")
+                result = conn.execute(text("SELECT name FROM sqlite_master WHERE type='table'"))
                 tables = [row[0] for row in result.fetchall()]
-                logger.info(f"✅ 成功创建 {len(tables)} 个表: {tables}")
+                logger.info(f"成功创建 {len(tables)} 个表: {tables}")
 
-        # 如果是MySQL，创建索引
-        if settings.is_mysql:
-            create_mysql_indexes()
+        if settings.is_mysql and len(tables) > 0:
+            create_mysql_indexes_sync(sync_engine)
+        else:
+            logger.info("跳过索引创建，因为没有表被创建")
 
     except Exception as e:
         logger.error(f"❌ 创建数据库表失败: {e}")
@@ -128,31 +141,74 @@ def create_tables():
         raise
 
 
-def create_mysql_indexes():
-    """为MySQL创建额外的索引"""
+def create_mysql_indexes_sync(engine):
+    """为MySQL创建额外的索引 - 同步版本"""
     try:
+        from sqlalchemy import text
+
         with engine.connect() as conn:
-            # 数据源连接表的复合索引
-            conn.execute("""
-                CREATE INDEX IF NOT EXISTS idx_data_source_connections_source_time 
-                ON data_source_connections(data_source_id, connection_timestamp)
-            """)
+            indexes_to_create = [
+                {
+                    'name': 'idx_data_source_connections_source_time',
+                    'table': 'data_source_connections',
+                    'sql': 'CREATE INDEX idx_data_source_connections_source_time ON data_source_connections(data_source_id, connection_timestamp)'
+                },
+                {
+                    'name': 'idx_cluster_metrics_time',
+                    'table': 'cluster_metrics',
+                    'sql': 'CREATE INDEX idx_cluster_metrics_time ON cluster_metrics(metric_timestamp DESC)'
+                },
+                {
+                    'name': 'idx_task_executions_def_time',
+                    'table': 'task_executions',
+                    'sql': 'CREATE INDEX idx_task_executions_def_time ON task_executions(task_definition_id, started_at DESC)'
+                }
+            ]
 
-            # 集群指标表的时间索引
-            conn.execute("""
-                CREATE INDEX IF NOT EXISTS idx_cluster_metrics_time 
-                ON cluster_metrics(metric_timestamp DESC)
-            """)
+            for index_info in indexes_to_create:
+                try:
+                    # 先检查表是否存在
+                    table_check = text("""
+                        SELECT COUNT(*) as count 
+                        FROM information_schema.tables 
+                        WHERE table_schema = DATABASE() 
+                        AND table_name = :table_name
+                    """)
 
-            # 任务执行表的复合索引
-            conn.execute("""
-                CREATE INDEX IF NOT EXISTS idx_task_executions_def_time 
-                ON task_executions(task_definition_id, started_at DESC)
-            """)
+                    table_result = conn.execute(table_check, {'table_name': index_info['table']})
 
-        print("✅ MySQL indexes created successfully")
+                    if table_result.fetchone()[0] == 0:
+                        logger.warning(f"Table {index_info['table']} does not exist, skipping index creation")
+                        continue
+
+                    # 检查索引是否已存在
+                    check_sql = text("""
+                        SELECT COUNT(*) as count 
+                        FROM information_schema.statistics 
+                        WHERE table_schema = DATABASE() 
+                        AND table_name = :table_name 
+                        AND index_name = :index_name
+                    """)
+
+                    result = conn.execute(check_sql, {
+                        'table_name': index_info['table'],
+                        'index_name': index_info['name']
+                    })
+
+                    if result.fetchone()[0] == 0:
+                        conn.execute(text(index_info['sql']))
+                        logger.info(f"Created index: {index_info['name']}")
+                    else:
+                        logger.info(f"Index already exists: {index_info['name']}")
+
+                except Exception as e:
+                    logger.warning(f"Failed to create index {index_info['name']}: {e}")
+
+            conn.commit()
+
+        logger.info("✅ MySQL indexes processing completed")
     except Exception as e:
-        print(f"⚠️ Failed to create MySQL indexes: {e}")
+        logger.warning(f"Failed to create MySQL indexes: {e}")
 
 
 def drop_tables():
@@ -176,17 +232,17 @@ def test_connection():
 
         with sync_engine.connect() as conn:
             if settings.is_mysql:
-                result = conn.execute("SELECT VERSION() as version")
+                result = conn.execute(text("SELECT VERSION() as version"))
                 version = result.fetchone()[0]
-                logger.info(f"✅ MySQL connection successful - Version: {version}")
+                logger.info(f"MySQL connection successful - Version: {version}")
             else:
-                result = conn.execute("SELECT sqlite_version() as version")
+                result = conn.execute(text("SELECT sqlite_version() as version"))
                 version = result.fetchone()[0]
-                logger.info(f"✅ SQLite connection successful - Version: {version}")
+                logger.info(f"SQLite connection successful - Version: {version}")
 
         return True
     except Exception as e:
-        logger.error(f"❌ Database connection failed: {e}")
+        logger.error(f"Database connection failed: {e}")
         return False
 
 
@@ -207,5 +263,5 @@ def create_async_engine():
             pool_recycle=settings.DATABASE_POOL_RECYCLE,
         )
     except ImportError:
-        print("⚠️ Async database dependencies not installed")
+        print("Async database dependencies not installed")
         return None

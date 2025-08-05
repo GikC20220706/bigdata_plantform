@@ -634,6 +634,7 @@ class OptimizedDataIntegrationService:
         """保存数据源配置到数据库"""
         try:
             from app.utils.database import get_sync_db_session
+            from sqlalchemy import text
             import json
 
             # 使用同步数据库会话
@@ -647,27 +648,38 @@ class OptimizedDataIntegrationService:
                     return
 
                 # 检查是否已存在
-                result = db.execute(text("SELECT id FROM data_sources WHERE name = %s"), (name,))
+                result = db.execute(text("SELECT id FROM data_sources WHERE name = :name"),
+                                    {"name": name})
                 existing = result.fetchone()
 
                 if existing:
                     # 更新现有记录
                     db.execute(text("""
                         UPDATE data_sources 
-                        SET source_type = %s, connection_config = %s, status = %s, 
-                            last_connection_test = NOW(), description = %s
-                        WHERE name = %s
-                    """), (db_type, json.dumps(config),
-                           "connected" if test_result.get('success') else "disconnected",
-                           description, name))
+                        SET source_type = :db_type, connection_config = :config, status = :status, 
+                            last_connection_test = NOW(), description = :description
+                        WHERE name = :name
+                    """), {
+                        "db_type": db_type,
+                        "config": json.dumps(config),
+                        "status": "connected" if test_result.get('success') else "disconnected",
+                        "description": description,
+                        "name": name
+                    })
                 else:
                     # 创建新记录
                     db.execute(text("""
                         INSERT INTO data_sources 
                         (name, display_name, source_type, connection_config, status, description, is_active, last_connection_test)
-                        VALUES (%s, %s, %s, %s, %s, %s, TRUE, NOW())
-                    """), (name, name, db_type, json.dumps(config),
-                           "connected" if test_result.get('success') else "disconnected", description))
+                        VALUES (:name, :display_name, :db_type, :config, :status, :description, TRUE, NOW())
+                    """), {
+                        "name": name,
+                        "display_name": name,
+                        "db_type": db_type,
+                        "config": json.dumps(config),
+                        "status": "connected" if test_result.get('success') else "disconnected",
+                        "description": description
+                    })
 
                 db.commit()
                 logger.info(f"数据源 {name} 保存到数据库成功")

@@ -51,17 +51,17 @@ async def lifespan(app: FastAPI):
 
     # Initialize database if needed
     try:
-        from app.utils.database import create_tables, test_connection
+        from app.utils.database import create_tables_sync, test_connection
         try:
             # 使用同步版本
             if test_connection():
-                create_tables()
+                create_tables_sync()
                 logger.info("✅ MySQL database initialized")
             else:
                 logger.warning("⚠️ Database connection test failed")
         except Exception as e:
             logger.warning(f"⚠️ Database initialization failed: {e}")
-            create_tables()
+            create_tables_sync()
             logger.info("✅ MySQL database initialized")
         else:
             logger.warning("⚠️ Database connection test failed")
