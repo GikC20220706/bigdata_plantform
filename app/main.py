@@ -52,7 +52,15 @@ async def lifespan(app: FastAPI):
     # Initialize database if needed
     try:
         from app.utils.database import create_tables, test_connection
-        if test_connection():
+        try:
+            # 使用同步版本
+            if test_connection():
+                create_tables()
+                logger.info("✅ MySQL database initialized")
+            else:
+                logger.warning("⚠️ Database connection test failed")
+        except Exception as e:
+            logger.warning(f"⚠️ Database initialization failed: {e}")
             create_tables()
             logger.info("✅ MySQL database initialized")
         else:
@@ -297,28 +305,25 @@ def setup_exception_handlers(app: FastAPI) -> None:
 
     @app.exception_handler(HTTPException)
     async def http_exception_handler(request: Request, exc: HTTPException):
-        """Handle HTTP exceptions with consistent response format."""
-        logger.error(f"HTTP {exc.status_code}: {exc.detail} - Path: {request.url.path}")
-
+        """Handle HTTP exceptions."""
         return JSONResponse(
             status_code=exc.status_code,
             content=create_error_response(
                 message=exc.detail,
                 code=exc.status_code
-            ).dict()
+            )
         )
 
     @app.exception_handler(Exception)
     async def general_exception_handler(request: Request, exc: Exception):
-        """Handle unexpected exceptions."""
-        logger.error(f"Unexpected error: {str(exc)} - Path: {request.url.path}", exc_info=True)
-
+        """Handle general exceptions."""
+        logger.error(f"Unhandled exception: {exc}")
         return JSONResponse(
             status_code=500,
             content=create_error_response(
                 message="内部服务器错误" if not settings.DEBUG else str(exc),
                 code=500
-            ).dict()
+            )
         )
 
 # 在 app/main.py 的 setup_middleware 函数中添加性能监控中间件

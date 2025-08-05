@@ -741,7 +741,7 @@ class DamengClient(DatabaseClient):
         try:
             engine = self._get_engine()
             with engine.connect() as conn:
-                result = conn.execute(text("SELECT BANNER FROM V$VERSION WHERE ROWNUM = 1"))
+                result = conn.execute(text("SELECT BANNER FROM $VERSION WHERE ROWNUM = 1"))
                 version = result.fetchone()[0] if result else "未知"
 
                 return {
@@ -764,7 +764,7 @@ class DamengClient(DatabaseClient):
         try:
             engine = self._get_engine()
             with engine.connect() as conn:
-                result = conn.execute(text("SELECT NAME FROM V$DATABASE"))
+                result = conn.execute(text("SELECT NAME FROM $DATABASE"))
                 return [row[0] for row in result.fetchall()]
         except Exception as e:
             logger.error(f"获取Dameng数据库列表失败: {e}")
@@ -1914,11 +1914,20 @@ class ConnectionManager:
         self._clients: Dict[str, DatabaseClient] = {}
         self._connection_cache = {}
 
-    def add_client(self, name: str, db_type: str, config: Dict[str, Any]) -> None:
+    def add_client(self, name: str, db_type: str, config: Dict[str, Any]) -> bool:
         """添加数据库客户端"""
-        client = DatabaseClientFactory.create_client(db_type, config)
-        self._clients[name] = client
-        logger.info(f"添加数据库客户端: {name} ({db_type})")
+        try:
+            client = DatabaseClientFactory.create_client(db_type, config)
+            if client:
+                self._clients[name] = client
+                logger.info(f"添加数据库客户端: {name} ({db_type})")
+                return True
+            else:
+                logger.error(f"无法创建客户端: {name} ({db_type}) - 不支持的数据库类型")
+                return False
+        except Exception as e:
+            logger.error(f"创建客户端失败: {name} ({db_type}) - {e}")
+            return False
 
     def get_client(self, name: str) -> Optional[DatabaseClient]:
         """获取数据库客户端"""

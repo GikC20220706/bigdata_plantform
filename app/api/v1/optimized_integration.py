@@ -36,21 +36,41 @@ async def get_data_sources():
         logger.error(f"获取数据源列表失败: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
+
 @router.post("/sources", summary="创建数据源")
 async def create_data_source(request: dict):
     try:
+        logger.info(f"收到创建数据源请求: {request}")
+
         name = request.get('name')
         db_type = request.get('type')
         config = request.get('config')
+        description = request.get('description', '')
+
         if not all([name, db_type, config]):
             raise HTTPException(status_code=400, detail="缺少必要字段: name, type, config")
-        result = await optimized_data_integration_service.add_data_source(name=name, db_type=db_type, config=config)
+
+        logger.info(f"开始创建数据源: {name}")
+        result = await optimized_data_integration_service.add_data_source(
+            name=name,
+            db_type=db_type,
+            config=config,
+            description=description
+        )
+
+        logger.info(f"数据源创建结果: {result}")
+
         if result.get('success'):
             return create_response(data=result, message=f"数据源 {name} 创建成功")
         else:
             raise HTTPException(status_code=400, detail=result.get('error', '创建数据源失败'))
+
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"创建数据源失败: {e}")
+        import traceback
+        logger.error(traceback.format_exc())
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.delete("/sources/{source_name}", summary="删除数据源")

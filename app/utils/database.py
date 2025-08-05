@@ -161,20 +161,32 @@ def drop_tables():
 
 
 def test_connection():
-    """测试数据库连接"""
+    """测试数据库连接 - 同步版本"""
     try:
-        with engine.connect() as conn:
+        # 使用同步连接字符串
+        sync_url = settings.DATABASE_URL.replace('+aiomysql', '+pymysql')
+
+        # 创建同步引擎
+        from sqlalchemy import create_engine
+        sync_engine = create_engine(
+            sync_url,
+            pool_pre_ping=True,
+            pool_recycle=300
+        )
+
+        with sync_engine.connect() as conn:
             if settings.is_mysql:
                 result = conn.execute("SELECT VERSION() as version")
                 version = result.fetchone()[0]
-                print(f"✅ MySQL connection successful - Version: {version}")
+                logger.info(f"✅ MySQL connection successful - Version: {version}")
             else:
                 result = conn.execute("SELECT sqlite_version() as version")
                 version = result.fetchone()[0]
-                print(f"✅ SQLite connection successful - Version: {version}")
+                logger.info(f"✅ SQLite connection successful - Version: {version}")
+
         return True
     except Exception as e:
-        print(f"❌ Database connection failed: {e}")
+        logger.error(f"❌ Database connection failed: {e}")
         return False
 
 

@@ -23,6 +23,7 @@ from app.utils.integration_cache import (
 from app.models.data_source import DataSource, DataSourceConnection
 from app.utils.database import get_db
 from config.settings import settings
+from sqlalchemy import text
 
 
 class OptimizedDataIntegrationService:
@@ -69,14 +70,14 @@ class OptimizedDataIntegrationService:
                     except Exception as e:
                         logger.error(f"❌ 加载数据源 {source.name} 失败: {e}")
 
-                logger.info(f"🎉 成功加载 {loaded_count} 个数据源连接配置")
+                logger.info(f"成功加载 {loaded_count} 个数据源连接配置")
 
             finally:
                 db.close()
 
         except Exception as e:
             logger.error(f"❌ 从数据库加载连接配置失败: {e}")
-            logger.info("💡 将继续启动，但需要手动配置数据源连接")
+            logger.info("将继续启动，但需要手动配置数据源连接")
 
     @cache_table_schema(ttl=1800)  # 30分钟缓存
     async def get_table_schema(self, source_name: str, table_name: str, database: str = None) -> Dict[str, Any]:
@@ -422,807 +423,852 @@ class OptimizedDataIntegrationService:
             {'redis': 300}  # 5分钟缓存
         )
 
+    async def get_data_sources_overview(self) -> Dict[str, Any]:
+        """获取数据源概览"""
+        try:
+            clients = self.connection_manager.list_clients()
+
+            # 如果没有客户端，返回基础信息
+            if not clients:
+                return {
+                    "total_sources": 0,
+                    "active_connections": 0,
+                    "failed_connections": 0,
+                    "supported_types": ["mysql", "postgresql", "hive", "doris", "kingbase"],
+                    "sources_by_type": {},
+                    "data_volume_estimate": "0GB",
+                    "last_sync": datetime.now(),
+                    "health_status": "正常"
+                }
+
+            # 并行测试连接
+            connection_results = await self._parallel_test_connections(clients)
+
+            # 统计结果
+            total_sources = len(clients)
+            active_connections = sum(1 for result in connection_results.values() if result.get('success'))
+            failed_connections = total_sources - active_connections
+
+            # 按类型统计
+            sources_by_type = {}
+            for client_name in clients:
+                client = self.connection_manager.get_client(client_name)
+                client_type = client.__class__.__name__.replace('Client', '').lower()
+                sources_by_type[client_type] = sources_by_type.get(client_type, 0) + 1
+
+            return {
+                "total_sources": total_sources,
+                "active_connections": active_connections,
+                "failed_connections": failed_connections,
+                "supported_types": ["mysql", "postgresql", "hive", "doris", "kingbase"],
+                "sources_by_type": sources_by_type,
+                "data_volume_estimate": f"{total_sources * 10}GB",
+                "last_sync": datetime.now(),
+                "health_status": "良好" if failed_connections == 0 else "部分异常" if active_connections > 0 else "异常"
+            }
+
+        except Exception as e:
+            logger.error(f"获取数据源概览失败: {e}")
+            return {
+                "total_sources": 0,
+                "active_connections": 0,
+                "failed_connections": 0,
+                "supported_types": ["mysql", "postgresql", "hive", "doris", "kingbase"],
+                "sources_by_type": {},
+                "data_volume_estimate": "0GB",
+                "last_sync": datetime.now(),
+                "health_status": "异常",
+                "error": str(e)
+            }
+
+    async def _parallel_test_connections(self, client_names: List[str]) -> Dict[str, Dict[str, Any]]:
+        """并行测试连接"""
+        results = {}
+        try:
+            # 限制并发数量
+            semaphore = asyncio.Semaphore(5)
+
+            async def test_single_connection(name):
+                async with semaphore:
+                    try:
+                        client = self.connection_manager.get_client(name)
+                        if client:
+                            result = await client.test_connection()
+                            return name, result
+                        else:
+                            return name, {"success": False, "error": "客户端不存在"}
+                    except Exception as e:
+                        return name, {"success": False, "error": str(e)}
+
+            # 并行执行测试
+            tasks = [test_single_connection(name) for name in client_names[:10]]  # 限制最多10个
+            test_results = await asyncio.gather(*tasks, return_exceptions=True)
+
+            for result in test_results:
+                if isinstance(result, tuple) and len(result) == 2:
+                    name, test_result = result
+                    results[name] = test_result
+
+        except Exception as e:
+            logger.error(f"并行测试连接失败: {e}")
+
+        return results
+
+    async def _estimate_total_data_volume(self, client_names: List[str]) -> str:
+        """估算总数据量"""
+        try:
+            # 尝试从真实集群获取数据量
+            from app.utils.hadoop_client import HDFSClient
+
+            try:
+                hdfs_client = HDFSClient()
+                storage_info = hdfs_client.get_storage_info()
+                if storage_info and storage_info.get('total_size', 0) > 0:
+                    total_gb = storage_info['total_size'] / (1024 ** 3)  # 转换为GB
+                    return f"{total_gb:.1f}GB"
+            except:
+                pass
+
+            # 备用估算
+            total_gb = len(client_names) * 50  # 生产环境估算更大
+            return f"{total_gb}GB"
+        except:
+            return "未知"
+
+    async def _get_mock_overview(self) -> Dict[str, Any]:
+        """获取Mock概览数据"""
+        return {
+            "total_sources": 6,
+            "active_connections": 5,
+            "failed_connections": 1,
+            "supported_types": DatabaseClientFactory.get_supported_types(),
+            "sources_by_type": {
+                "mysql": 2,
+                "hive": 1,
+                "doris": 1,
+                "kingbase": 1,
+                "tidb": 1
+            },
+            "data_volume_estimate": "125.6GB",
+            "last_sync": datetime.now(),
+            "health_status": "良好",
+            "cache_info": self.cache_manager.get_cache_stats()
+        }
+
+    async def add_data_source(self, name: str, db_type: str, config: Dict[str, Any], description: str = "") -> Dict[
+        str, Any]:
+        """添加数据源"""
+        try:
+            logger.info(f"开始添加数据源: name={name}, type={db_type}")
+
+            # 验证参数
+            if not name or not db_type or not config:
+                return {
+                    "success": False,
+                    "error": "参数不完整: 需要name, db_type, config"
+                }
+
+            # 检查数据源是否已存在
+            if self.connection_manager.get_client(name):
+                return {
+                    "success": False,
+                    "error": f"数据源 '{name}' 已存在"
+                }
+
+            # 添加到连接管理器
+            logger.info(f"添加到连接管理器: {name}")
+            success = self.connection_manager.add_client(name, db_type, config)
+            if not success:
+                return {
+                    "success": False,
+                    "error": f"不支持的数据库类型: {db_type}"
+                }
+
+            # 测试连接
+            logger.info(f"测试连接: {name}")
+            client = self.connection_manager.get_client(name)
+            test_result = await client.test_connection()
+
+            # 保存到数据库
+            try:
+                await self._save_data_source_to_db(name, db_type, config, test_result, description)
+                logger.info(f"保存到数据库成功: {name}")
+            except Exception as db_error:
+                logger.error(f"保存到数据库失败: {db_error}")
+                # 即使数据库保存失败，也不影响内存中的连接
+
+            # 清除相关缓存
+            try:
+                await self.cache_manager.invalidate_cache(pattern=name)
+                await self.cache_manager.invalidate_cache(pattern="overview")
+            except Exception as cache_error:
+                logger.warning(f"清除缓存失败: {cache_error}")
+
+            return {
+                "success": True,
+                "name": name,
+                "type": db_type,
+                "test_result": test_result,
+                "created_at": datetime.now()
+            }
+
+        except Exception as e:
+            logger.error(f"添加数据源失败 {name}: {e}")
+            import traceback
+            logger.error(traceback.format_exc())
+
+            # 如果出错，从连接管理器中移除
+            try:
+                self.connection_manager.remove_client(name)
+            except:
+                pass
+
+            return {
+                "success": False,
+                "error": str(e)
+            }
+
+    async def _save_data_source_to_db(self, name: str, db_type: str, config: Dict[str, Any],
+                                      test_result: Dict[str, Any],
+                                      description: str = ""):
+        """保存数据源配置到数据库"""
+        try:
+            from app.utils.database import get_sync_db_session
+            import json
+
+            # 使用同步数据库会话
+            db = get_sync_db_session()
+
+            try:
+                # 检查表是否存在
+                result = db.execute(text("SHOW TABLES LIKE 'data_sources'"))
+                if not result.fetchone():
+                    logger.warning("data_sources表不存在，跳过数据库保存")
+                    return
+
+                # 检查是否已存在
+                result = db.execute(text("SELECT id FROM data_sources WHERE name = %s"), (name,))
+                existing = result.fetchone()
+
+                if existing:
+                    # 更新现有记录
+                    db.execute(text("""
+                        UPDATE data_sources 
+                        SET source_type = %s, connection_config = %s, status = %s, 
+                            last_connection_test = NOW(), description = %s
+                        WHERE name = %s
+                    """), (db_type, json.dumps(config),
+                           "connected" if test_result.get('success') else "disconnected",
+                           description, name))
+                else:
+                    # 创建新记录
+                    db.execute(text("""
+                        INSERT INTO data_sources 
+                        (name, display_name, source_type, connection_config, status, description, is_active, last_connection_test)
+                        VALUES (%s, %s, %s, %s, %s, %s, TRUE, NOW())
+                    """), (name, name, db_type, json.dumps(config),
+                           "connected" if test_result.get('success') else "disconnected", description))
+
+                db.commit()
+                logger.info(f"数据源 {name} 保存到数据库成功")
+
+            finally:
+                db.close()
+
+        except Exception as e:
+            logger.error(f"保存数据源到数据库失败: {e}")
+            if 'db' in locals():
+                try:
+                    db.rollback()
+                    db.close()
+                except:
+                    pass
+
+    @cache_connection_status(ttl=30)
+    async def test_data_source(self, name: str) -> Dict[str, Any]:
+        """测试数据源连接 - 缓存优化"""
+        try:
+            client = self.connection_manager.get_client(name)
+            if not client:
+                return {
+                    "success": False,
+                    "error": f"数据源 {name} 不存在"
+                }
+
+            result = await client.test_connection()
+
+            # 异步记录测试结果到数据库
+            asyncio.create_task(self._record_connection_test(name, result))
+
+            return result
+        except Exception as e:
+            logger.error(f"测试数据源连接失败 {name}: {e}")
+            return {
+                "success": False,
+                "error": str(e),
+                "test_time": datetime.now()
+            }
+
+    async def _record_connection_test(self, name: str, test_result: Dict[str, Any]):
+        """异步记录连接测试结果"""
+        try:
+            db = next(get_db())
+            data_source = db.query(DataSource).filter(DataSource.name == name).first()
+
+            if data_source:
+                # 更新数据源状态
+                data_source.status = "online" if test_result.get('success') else "offline"
+                data_source.last_connection_test = datetime.now()
+
+                # 记录连接历史
+                connection_record = DataSourceConnection(
+                    data_source_id=data_source.id,
+                    connection_timestamp=datetime.now(),
+                    connection_type="test",
+                    success=test_result.get('success', False),
+                    response_time_ms=test_result.get('response_time_ms', 0),
+                    error_message=test_result.get('error') if not test_result.get('success') else None
+                )
+                db.add(connection_record)
+                db.commit()
+
+            db.close()
+        except Exception as e:
+            logger.error(f"记录连接测试结果失败: {e}")
+
+    async def remove_data_source(self, name: str) -> Dict[str, Any]:
+        """删除数据源"""
+        try:
+            # 从连接管理器中移除
+            removed = self.connection_manager.remove_client(name)
+
+            if removed:
+                # 从数据库中软删除
+                try:
+                    await self._remove_from_db(name)
+                except Exception as db_error:
+                    logger.error(f"从数据库删除失败: {db_error}")
+
+                return {
+                    "success": True,
+                    "message": f"数据源 {name} 删除成功"
+                }
+            else:
+                return {
+                    "success": False,
+                    "error": f"数据源 {name} 不存在"
+                }
+
+        except Exception as e:
+            logger.error(f"删除数据源失败: {e}")
+            return {
+                "success": False,
+                "error": str(e)
+            }
+
+    async def _remove_data_source_from_db(self, name: str) -> bool:
+        """从数据库删除数据源（软删除）"""
+        try:
+            db = next(get_db())
+            data_source = db.query(DataSource).filter(DataSource.name == name).first()
+
+            if data_source:
+                # 软删除：设置为非活跃状态
+                data_source.is_active = False
+                data_source.status = "deleted"
+                db.commit()
+                logger.info(f"数据源 {name} 已从数据库软删除")
+                return True
+            else:
+                logger.warning(f"数据库中未找到数据源 {name}")
+                return False
+
+            db.close()
+
+        except Exception as e:
+            logger.error(f"从数据库删除数据源失败: {e}")
+            if 'db' in locals():
+                db.rollback()
+                db.close()
+            return False
+
+    async def _remove_from_db(self, name: str):
+        """从数据库中移除数据源"""
+        try:
+            from app.utils.database import get_sync_db_session
+
+            db = get_sync_db_session()
+            try:
+                # 软删除
+                db.execute(text("""
+                    UPDATE data_sources 
+                    SET is_active = FALSE, status = 'deleted'
+                    WHERE name = %s
+                """), (name,))
+                db.commit()
+                logger.info(f"数据源 {name} 已从数据库软删除")
+            finally:
+                db.close()
+
+        except Exception as e:
+            logger.error(f"从数据库删除数据源失败: {e}")
+
+    async def get_table_metadata(self, source_name: str, table_name: str, database: str = None) -> Dict[str, Any]:
+        """获取表的完整元数据 - 缓存优化"""
+        cache_key = f"metadata_{source_name}_{database or 'default'}_{table_name}"
+
+        async def fetch_metadata():
+            client = self.connection_manager.get_client(source_name)
+            if not client:
+                return {
+                    "success": False,
+                    "error": f"数据源 {source_name} 不存在"
+                }
+
+            metadata = await client.get_table_metadata(table_name, database)
+            return {
+                "success": True,
+                "source_name": source_name,
+                "metadata": metadata,
+                "retrieved_at": datetime.now()
+            }
+
+        return await self.cache_manager.get_cached_data(
+            cache_key,
+            fetch_metadata,
+            {'redis': 1800}  # 30分钟缓存
+        )
+
+    async def search_tables(self, keyword: str = None, source_name: str = None, table_type: str = None) -> Dict[
+        str, Any]:
+        """搜索表 - 智能缓存"""
+        cache_key = f"search_{keyword or 'all'}_{source_name or 'all'}_{table_type or 'all'}"
+
+        async def fetch_search_results():
+            all_tables = []
+            clients_to_search = [source_name] if source_name else self.connection_manager.list_clients()
+
+            # 并行搜索多个数据源
+            search_tasks = []
+            for client_name in clients_to_search[:10]:  # 限制并发数
+                search_tasks.append(self._search_single_source(client_name, keyword, table_type))
+
+            search_results = await asyncio.gather(*search_tasks, return_exceptions=True)
+
+            for result in search_results:
+                if isinstance(result, list):
+                    all_tables.extend(result)
+
+            return {
+                "success": True,
+                "tables": all_tables,
+                "total_count": len(all_tables),
+                "search_criteria": {
+                    "keyword": keyword,
+                    "source_name": source_name,
+                    "table_type": table_type
+                },
+                "searched_at": datetime.now()
+            }
+
+        return await self.cache_manager.get_cached_data(
+            cache_key,
+            fetch_search_results,
+            {'redis': 600}  # 10分钟缓存
+        )
+
+    async def _search_single_source(self, client_name: str, keyword: str, table_type: str) -> List[Dict[str, Any]]:
+        """搜索单个数据源"""
+        try:
+            tables_result = await self.get_tables(client_name)
+            if not tables_result.get('success'):
+                return []
+
+            tables = []
+            for table in tables_result['tables']:
+                table['source_name'] = client_name
+
+                # 应用过滤条件
+                if keyword and keyword.lower() not in table['table_name'].lower():
+                    continue
+                if table_type and table.get('table_type', '').lower() != table_type.lower():
+                    continue
+
+                tables.append(table)
+
+            return tables
+        except Exception as e:
+            logger.warning(f"搜索数据源 {client_name} 时出错: {e}")
+            return []
+
+    async def get_supported_database_types(self) -> List[Dict[str, Any]]:
+        """获取支持的数据库类型 - 静态缓存"""
+        cache_key = "supported_types"
+
+        async def fetch_types():
+            from app.utils.data_integration_clients import DatabaseClientFactory
+            return DatabaseClientFactory.get_supported_types()
+
+        types = await self.cache_manager.get_cached_data(
+            cache_key,
+            fetch_types,
+            {'redis': 3600}  # 1小时缓存
+        )
+
+        return types
+
+    async def preview_data_source(self, source_name: str, table_name: str = None, database: str = None,
+                                  limit: int = 10) -> \
+            Dict[str, Any]:
+        """预览数据源数据"""
+        try:
+            client = self.connection_manager.get_client(source_name)
+            if not client:
+                return {
+                    "success": False,
+                    "error": f"数据源 {source_name} 不存在"
+                }
+
+            # 如果没有指定表名，获取第一个表
+            if not table_name:
+                tables_result = await self.get_tables(source_name, database)
+                if not tables_result.get('success') or not tables_result.get('tables'):
+                    return {
+                        "success": False,
+                        "error": "没有可用的表进行预览"
+                    }
+                # 获取第一个表的名称
+                tables = tables_result['tables']
+                if tables:
+                    table_name = tables[0]['table_name']  # 修复：从tables结果中获取table_name
+                else:
+                    return {
+                        "success": False,
+                        "error": "数据源中没有找到任何表"
+                    }
+
+            # 执行查询预览
+            query = f"SELECT * FROM {table_name} LIMIT {limit}"
+            result = await self.execute_query(source_name, query, database, limit=limit)
+
+            if result.get('success'):
+                return {
+                    "success": True,
+                    "source_name": source_name,
+                    "table_name": table_name,
+                    "database": database,
+                    "preview_data": result.get('results', []),
+                    "row_count": len(result.get('results', [])),
+                    "limit": limit
+                }
+            else:
+                return result
+
+        except Exception as e:
+            logger.error(f"预览数据源失败: {e}")
+            return {
+                "success": False,
+                "error": str(e)
+            }
+
+    async def get_data_source_statistics(self, source_name: str) -> Dict[str, Any]:
+        """获取数据源统计信息 - 缓存优化"""
+        cache_key = f"statistics_{source_name}"
+
+        async def fetch_statistics():
+            # 获取数据库列表
+            databases_result = await self.get_databases(source_name)
+            if not databases_result.get('success'):
+                return {
+                    "success": False,
+                    "error": databases_result.get('error', '数据源不存在')
+                }
+
+            databases = databases_result.get('databases', [])
+            total_tables = 0
+            tables_by_database = {}
+
+            # 并行统计每个数据库的表数量
+            table_tasks = []
+            for db in databases[:5]:  # 限制并发数，只统计前5个数据库
+                table_tasks.append(self._count_tables_in_database(source_name, db))
+
+            table_results = await asyncio.gather(*table_tasks, return_exceptions=True)
+
+            for i, (db, result) in enumerate(zip(databases[:5], table_results)):
+                if isinstance(result, dict) and result.get('success'):
+                    db_table_count = result.get('count', 0)
+                    total_tables += db_table_count
+                    tables_by_database[db] = db_table_count
+                else:
+                    tables_by_database[db] = 0
+
+            # 测试连接状态
+            test_result = await self.test_data_source(source_name)
+
+            statistics = {
+                "source_name": source_name,
+                "connection_status": "connected" if test_result.get('success') else "disconnected",
+                "database_type": test_result.get('database_type', '未知'),
+                "version": test_result.get('version', '未知'),
+                "total_databases": len(databases),
+                "total_tables": total_tables,
+                "tables_by_database": tables_by_database,
+                "last_test": test_result.get('test_time', datetime.now()),
+                "response_time_ms": test_result.get('response_time_ms', 0),
+                "collected_at": datetime.now()
+            }
+
+            if not test_result.get('success'):
+                statistics["error"] = test_result.get('error', '连接失败')
+
+            return {
+                "success": True,
+                **statistics
+            }
+
+        return await self.cache_manager.get_cached_data(
+            cache_key,
+            fetch_statistics,
+            {'redis': 900}  # 15分钟缓存
+        )
+
+    async def _count_tables_in_database(self, source_name: str, database: str) -> Dict[str, Any]:
+        """统计单个数据库的表数量"""
+        try:
+            tables_result = await self.get_tables(source_name, database)
+            return tables_result
+        except Exception as e:
+            return {"success": False, "error": str(e), "count": 0}
+
+    # Excel相关方法
+    async def upload_excel_source(self, name: str, file, description: str = None) -> Dict[str, Any]:
+        """上传Excel文件创建数据源"""
+        try:
+            from app.utils.data_integration_clients import excel_service
+
+            # 验证文件类型
+            if not file.filename.lower().endswith(('.xlsx', '.xls')):
+                return {
+                    "success": False,
+                    "error": "不支持的文件类型，请上传.xlsx或.xls文件"
+                }
+
+            # 验证文件大小 (限制为50MB)
+            content = await file.read()
+            file_size = len(content)
+            await file.seek(0)  # 重置文件指针
+
+            if file_size > 50 * 1024 * 1024:  # 50MB
+                return {
+                    "success": False,
+                    "error": "文件大小超过限制（50MB）"
+                }
+
+            # 创建Excel数据源
+            result = await excel_service.create_excel_source(name, file, description)
+
+            if result.get('success'):
+                # 添加到连接管理器
+                config = result['config']
+                add_result = await self.add_data_source(
+                    name=name,
+                    db_type='excel',
+                    config=config
+                )
+
+                if add_result.get('success'):
+                    # 清除相关缓存
+                    await self.cache_manager.invalidate_cache(pattern="overview")
+
+                    return {
+                        "success": True,
+                        "source_info": add_result,
+                        "upload_info": result['upload_info']
+                    }
+                else:
+                    # 如果添加数据源失败，删除上传的文件
+                    await excel_service.delete_excel_source(config)
+                    return {
+                        "success": False,
+                        "error": add_result.get('error', '创建数据源失败')
+                    }
+            else:
+                return result
+
+        except Exception as e:
+            logger.error(f"上传Excel文件失败: {e}")
+            return {
+                "success": False,
+                "error": str(e)
+            }
+
+    async def list_excel_files(self) -> List[Dict[str, Any]]:
+        """获取Excel文件列表"""
+        try:
+            # 返回空列表，实际实现可以扫描上传目录
+            return []
+        except Exception as e:
+            logger.error(f"获取Excel文件列表失败: {e}")
+            return []
+
+    async def get_excel_sheets(self, source_name: str) -> Dict[str, Any]:
+        """获取Excel工作表列表"""
+        try:
+            result = await self.get_tables(source_name)
+            return result
+        except Exception as e:
+            logger.error(f"获取Excel工作表列表失败: {e}")
+            return {
+                "success": False,
+                "error": str(e)
+            }
+
+    async def preview_excel_sheet(self, source_name: str, sheet_name: str, limit: int = 10) -> Dict[str, Any]:
+        """预览Excel工作表数据"""
+        try:
+            client = self.connection_manager.get_client(source_name)
+            if not client:
+                return {
+                    "success": False,
+                    "error": f"数据源 {source_name} 不存在"
+                }
+
+            # 检查是否为Excel客户端
+            if not hasattr(client, 'get_data_preview'):
+                return {
+                    "success": False,
+                    "error": "该数据源不支持预览功能"
+                }
+
+            result = await client.get_data_preview(sheet_name, limit)
+            return result
+        except Exception as e:
+            logger.error(f"预览Excel工作表失败: {e}")
+            return {
+                "success": False,
+                "error": str(e)
+            }
+
+    async def delete_excel_source(self, source_name: str) -> Dict[str, Any]:
+        """删除Excel数据源和对应的文件"""
+        try:
+            client = self.connection_manager.get_client(source_name)
+            if not client:
+                return {
+                    "success": False,
+                    "error": f"数据源 {source_name} 不存在"
+                }
+
+            # 获取文件配置
+            config = client.config if hasattr(client, 'config') else {}
+
+            # 删除文件
+            from app.utils.data_integration_clients import excel_service
+            delete_result = await excel_service.delete_excel_source(config)
+
+            # 删除数据源
+            source_result = await self.remove_data_source(source_name)
+
+            return {
+                "success": True,
+                "file_deleted": delete_result.get('success', False),
+                "source_deleted": source_result.get('success', False),
+                "file_message": delete_result.get('message', ''),
+                "source_message": source_result.get('message', '')
+            }
+        except Exception as e:
+            logger.error(f"删除Excel数据源失败: {e}")
+            return {
+                "success": False,
+                "error": str(e)
+            }
+
+    async def export_excel_sheet(self, source_name: str, sheet_name: str, export_format: str = "json",
+                                 limit: int = None) -> \
+            Dict[str, Any]:
+        """导出Excel工作表数据"""
+        try:
+            # 构建查询
+            query = f"SELECT * FROM {sheet_name}"
+            if limit:
+                query += f" LIMIT {limit}"
+
+            result = await self.execute_query(
+                source_name=source_name,
+                query=query,
+                limit=limit or 1000
+            )
+
+            if result.get('success'):
+                data = result['results']
+
+                return {
+                    "success": True,
+                    "sheet_name": sheet_name,
+                    "export_format": export_format,
+                    "data": data,
+                    "row_count": len(data),
+                    "exported_at": datetime.now()
+                }
+            else:
+                return result
+
+        except Exception as e:
+            logger.error(f"导出Excel工作表失败: {e}")
+            return {
+                "success": False,
+                "error": str(e)
+            }
+
+    async def _load_real_cluster_connections(self):
+        """加载真实集群连接"""
+        try:
+            # 加载Hive连接
+            if settings.HIVE_SERVER_HOST:
+                hive_config = {
+                    "host": settings.HIVE_SERVER_HOST,
+                    "port": settings.HIVE_SERVER_PORT,
+                    "username": settings.HIVE_USERNAME,
+                    "password": settings.HIVE_PASSWORD,
+                    "database": settings.HIVE_DATABASE or "default"
+                }
+                self.connection_manager.add_client("Production-Hive", "hive", hive_config)
+                logger.info("✅ 加载Hive生产连接")
+
+            # 加载HDFS连接（如果有客户端支持）
+            if settings.HDFS_NAMENODE:
+                hdfs_config = {
+                    "namenode": settings.HDFS_NAMENODE,
+                    "user": settings.HDFS_USER
+                }
+                # 如果有HDFS客户端实现，在这里添加
+                logger.info("✅ HDFS配置已读取")
+
+        except Exception as e:
+            logger.error(f"加载真实集群连接失败: {e}")
+
+    async def _get_production_fallback_overview(self) -> Dict[str, Any]:
+        """生产环境备用概览数据"""
+        return {
+            "total_sources": 2,
+            "active_connections": 1,
+            "failed_connections": 1,
+            "supported_types": DatabaseClientFactory.get_supported_types(),
+            "sources_by_type": {"hive": 1, "hdfs": 1},
+            "data_volume_estimate": "100.0GB",
+            "last_sync": datetime.now(),
+            "health_status": "部分异常",
+            "error": "部分数据源连接失败",
+            "cluster_info": {
+                "hive_host": settings.HIVE_SERVER_HOST,
+                "hdfs_namenode": settings.HDFS_NAMENODE
+            }
+        }
+
 
 # 全局优化服务实例
 optimized_data_integration_service = OptimizedDataIntegrationService()
 cache_connection_status(ttl=60)
 
 
-async def get_data_sources_overview(self) -> Dict[str, Any]:
-    """获取数据源概览 - 连接真实集群"""
-    try:
-        clients = self.connection_manager.list_clients()
-
-        # 如果没有配置的数据源，先加载真实集群连接
-        if not clients:
-            await self._load_real_cluster_connections()
-            clients = self.connection_manager.list_clients()
-
-        # 并行测试所有连接
-        connection_results = await self._parallel_test_connections(clients)
-
-        # 统计结果
-        total_sources = len(clients)
-        active_connections = sum(1 for result in connection_results.values() if result.get('success'))
-        failed_connections = total_sources - active_connections
-
-        # 按类型统计
-        sources_by_type = {}
-        for client_name in clients:
-            client = self.connection_manager.get_client(client_name)
-            client_type = client.__class__.__name__.replace('Client', '').lower()
-            sources_by_type[client_type] = sources_by_type.get(client_type, 0) + 1
-
-        return {
-            "total_sources": total_sources,
-            "active_connections": active_connections,
-            "failed_connections": failed_connections,
-            "supported_types": DatabaseClientFactory.get_supported_types(),
-            "sources_by_type": sources_by_type,
-            "data_volume_estimate": await self._estimate_total_data_volume(clients),
-            "last_sync": datetime.now(),
-            "health_status": "良好" if failed_connections == 0 else "部分异常" if active_connections > 0 else "异常"
-        }
-    except Exception as e:
-        logger.error(f"获取数据源概览失败: {e}")
-        # 生产环境也要有备用数据
-        return await self._get_production_fallback_overview()
-
-
-async def _parallel_test_connections(self, client_names: List[str]) -> Dict[str, Dict]:
-    """并行测试连接"""
-
-    async def test_single_connection(name):
-        try:
-            client = self.connection_manager.get_client(name)
-            if client:
-                return name, await client.test_connection()
-            return name, {"success": False, "error": "Client not found"}
-        except Exception as e:
-            return name, {"success": False, "error": str(e)}
-
-    semaphore = asyncio.Semaphore(5)  # 限制并发数
-
-    async def test_with_semaphore(name):
-        async with semaphore:
-            return await test_single_connection(name)
-
-    tasks = [test_with_semaphore(name) for name in client_names]
-    results = await asyncio.gather(*tasks, return_exceptions=True)
-
-    return {name: result for name, result in results if not isinstance(result, Exception)}
-
-async def _estimate_total_data_volume(self, client_names: List[str]) -> str:
-    """估算总数据量"""
-    try:
-        # 尝试从真实集群获取数据量
-        from app.utils.hadoop_client import HDFSClient
-
-        try:
-            hdfs_client = HDFSClient()
-            storage_info = hdfs_client.get_storage_info()
-            if storage_info and storage_info.get('total_size', 0) > 0:
-                total_gb = storage_info['total_size'] / (1024 ** 3)  # 转换为GB
-                return f"{total_gb:.1f}GB"
-        except:
-            pass
-
-        # 备用估算
-        total_gb = len(client_names) * 50  # 生产环境估算更大
-        return f"{total_gb}GB"
-    except:
-        return "未知"
-
-
-async def _get_mock_overview(self) -> Dict[str, Any]:
-    """获取Mock概览数据"""
-    return {
-        "total_sources": 6,
-        "active_connections": 5,
-        "failed_connections": 1,
-        "supported_types": DatabaseClientFactory.get_supported_types(),
-        "sources_by_type": {
-            "mysql": 2,
-            "hive": 1,
-            "doris": 1,
-            "kingbase": 1,
-            "tidb": 1
-        },
-        "data_volume_estimate": "125.6GB",
-        "last_sync": datetime.now(),
-        "health_status": "良好",
-        "cache_info": self.cache_manager.get_cache_stats()
-    }
-
-
-async def add_data_source(self, name: str, db_type: str, config: Dict[str, Any]) -> Dict[str, Any]:
-    """添加数据源 - 持久化到数据库"""
-    try:
-        # 验证配置
-        if db_type == "excel":
-            required_fields = ['file_path']
-        else:
-            required_fields = ['host', 'username']
-
-        missing_fields = [field for field in required_fields if field not in config]
-        if missing_fields:
-            return {
-                "success": False,
-                "error": f"缺少必要配置项: {', '.join(missing_fields)}"
-            }
-
-        # 创建客户端
-        self.connection_manager.add_client(name, db_type, config)
-
-        # 测试连接
-        client = self.connection_manager.get_client(name)
-        test_result = await client.test_connection()
-
-        # 保存到数据库
-        if test_result.get('success'):
-            await self._save_data_source_to_db(name, db_type, config, test_result)
-
-        # 清除相关缓存
-        await self.cache_manager.invalidate_cache(pattern=name)
-        await self.cache_manager.invalidate_cache(pattern="overview")
-
-        return {
-            "success": True,
-            "name": name,
-            "type": db_type,
-            "test_result": test_result,
-            "created_at": datetime.now()
-        }
-    except Exception as e:
-        logger.error(f"添加数据源失败 {name}: {e}")
-        return {
-            "success": False,
-            "error": str(e)
-        }
-
-
-async def _save_data_source_to_db(self, name: str, db_type: str, config: Dict[str, Any], test_result: Dict[str, Any]):
-    """保存数据源配置到数据库"""
-    try:
-        db = next(get_db())
-
-        # 检查是否已存在
-        existing = db.query(DataSource).filter(DataSource.name == name).first()
-        if existing:
-            # 更新现有记录
-            existing.source_type = db_type
-            existing.connection_config = json.dumps(config)
-            existing.status = "online" if test_result.get('success') else "offline"
-            existing.last_connection_test = datetime.now()
-        else:
-            # 创建新记录
-            data_source = DataSource(
-                name=name,
-                display_name=name,
-                source_type=db_type,
-                connection_config=json.dumps(config),
-                status="online" if test_result.get('success') else "offline",
-                is_active=True,
-                last_connection_test=datetime.now()
-            )
-            db.add(data_source)
-
-        # 记录连接测试结果
-        connection_record = DataSourceConnection(
-            data_source_id=existing.id if existing else None,
-            connection_timestamp=datetime.now(),
-            connection_type="initial_test",
-            success=test_result.get('success', False),
-            response_time_ms=test_result.get('response_time_ms', 0),
-            error_message=test_result.get('error') if not test_result.get('success') else None
-        )
-        db.add(connection_record)
-
-        db.commit()
-        db.close()
-
-    except Exception as e:
-        logger.error(f"保存数据源到数据库失败: {e}")
-
-
-@cache_connection_status(ttl=30)
-async def test_data_source(self, name: str) -> Dict[str, Any]:
-    """测试数据源连接 - 缓存优化"""
-    try:
-        client = self.connection_manager.get_client(name)
-        if not client:
-            return {
-                "success": False,
-                "error": f"数据源 {name} 不存在"
-            }
-
-        result = await client.test_connection()
-
-        # 异步记录测试结果到数据库
-        asyncio.create_task(self._record_connection_test(name, result))
-
-        return result
-    except Exception as e:
-        logger.error(f"测试数据源连接失败 {name}: {e}")
-        return {
-            "success": False,
-            "error": str(e),
-            "test_time": datetime.now()
-        }
-
-
-async def _record_connection_test(self, name: str, test_result: Dict[str, Any]):
-    """异步记录连接测试结果"""
-    try:
-        db = next(get_db())
-        data_source = db.query(DataSource).filter(DataSource.name == name).first()
-
-        if data_source:
-            # 更新数据源状态
-            data_source.status = "online" if test_result.get('success') else "offline"
-            data_source.last_connection_test = datetime.now()
-
-            # 记录连接历史
-            connection_record = DataSourceConnection(
-                data_source_id=data_source.id,
-                connection_timestamp=datetime.now(),
-                connection_type="test",
-                success=test_result.get('success', False),
-                response_time_ms=test_result.get('response_time_ms', 0),
-                error_message=test_result.get('error') if not test_result.get('success') else None
-            )
-            db.add(connection_record)
-            db.commit()
-
-        db.close()
-    except Exception as e:
-        logger.error(f"记录连接测试结果失败: {e}")
-
-
-async def remove_data_source(self, name: str) -> Dict[str, Any]:
-    """移除数据源 - 同时从内存和数据库删除"""
-    try:
-        # 从内存移除
-        if name not in self.connection_manager.list_clients():
-            return {
-                "success": False,
-                "error": f"数据源 {name} 不存在"
-            }
-
-        self.connection_manager.remove_client(name)
-
-        # 从数据库删除（软删除）
-        db_success = await self._remove_data_source_from_db(name)
-
-        # 清除相关缓存
-        await self.cache_manager.invalidate_cache(pattern=name)
-        await self.cache_manager.invalidate_cache(pattern="overview")
-
-        return {
-            "success": True,
-            "message": f"数据源 {name} 已移除",
-            "removed_from_memory": True,
-            "removed_from_database": db_success
-        }
-    except Exception as e:
-        logger.error(f"移除数据源失败 {name}: {e}")
-        return {
-            "success": False,
-            "error": str(e)
-        }
-
-
-async def _remove_data_source_from_db(self, name: str) -> bool:
-    """从数据库删除数据源（软删除）"""
-    try:
-        db = next(get_db())
-        data_source = db.query(DataSource).filter(DataSource.name == name).first()
-
-        if data_source:
-            # 软删除：设置为非活跃状态
-            data_source.is_active = False
-            data_source.status = "deleted"
-            db.commit()
-            logger.info(f"数据源 {name} 已从数据库软删除")
-            return True
-        else:
-            logger.warning(f"数据库中未找到数据源 {name}")
-            return False
-
-        db.close()
-
-    except Exception as e:
-        logger.error(f"从数据库删除数据源失败: {e}")
-        if 'db' in locals():
-            db.rollback()
-            db.close()
-        return False
-
-
-async def get_table_metadata(self, source_name: str, table_name: str, database: str = None) -> Dict[str, Any]:
-    """获取表的完整元数据 - 缓存优化"""
-    cache_key = f"metadata_{source_name}_{database or 'default'}_{table_name}"
-
-    async def fetch_metadata():
-        client = self.connection_manager.get_client(source_name)
-        if not client:
-            return {
-                "success": False,
-                "error": f"数据源 {source_name} 不存在"
-            }
-
-        metadata = await client.get_table_metadata(table_name, database)
-        return {
-            "success": True,
-            "source_name": source_name,
-            "metadata": metadata,
-            "retrieved_at": datetime.now()
-        }
-
-    return await self.cache_manager.get_cached_data(
-        cache_key,
-        fetch_metadata,
-        {'redis': 1800}  # 30分钟缓存
-    )
-
-
-async def search_tables(self, keyword: str = None, source_name: str = None, table_type: str = None) -> Dict[str, Any]:
-    """搜索表 - 智能缓存"""
-    cache_key = f"search_{keyword or 'all'}_{source_name or 'all'}_{table_type or 'all'}"
-
-    async def fetch_search_results():
-        all_tables = []
-        clients_to_search = [source_name] if source_name else self.connection_manager.list_clients()
-
-        # 并行搜索多个数据源
-        search_tasks = []
-        for client_name in clients_to_search[:10]:  # 限制并发数
-            search_tasks.append(self._search_single_source(client_name, keyword, table_type))
-
-        search_results = await asyncio.gather(*search_tasks, return_exceptions=True)
-
-        for result in search_results:
-            if isinstance(result, list):
-                all_tables.extend(result)
-
-        return {
-            "success": True,
-            "tables": all_tables,
-            "total_count": len(all_tables),
-            "search_criteria": {
-                "keyword": keyword,
-                "source_name": source_name,
-                "table_type": table_type
-            },
-            "searched_at": datetime.now()
-        }
-
-    return await self.cache_manager.get_cached_data(
-        cache_key,
-        fetch_search_results,
-        {'redis': 600}  # 10分钟缓存
-    )
-
-
-async def _search_single_source(self, client_name: str, keyword: str, table_type: str) -> List[Dict[str, Any]]:
-    """搜索单个数据源"""
-    try:
-        tables_result = await self.get_tables(client_name)
-        if not tables_result.get('success'):
-            return []
-
-        tables = []
-        for table in tables_result['tables']:
-            table['source_name'] = client_name
-
-            # 应用过滤条件
-            if keyword and keyword.lower() not in table['table_name'].lower():
-                continue
-            if table_type and table.get('table_type', '').lower() != table_type.lower():
-                continue
-
-            tables.append(table)
-
-        return tables
-    except Exception as e:
-        logger.warning(f"搜索数据源 {client_name} 时出错: {e}")
-        return []
-
-
-async def get_supported_database_types(self) -> List[Dict[str, Any]]:
-    """获取支持的数据库类型 - 静态缓存"""
-    cache_key = "supported_types"
-
-    async def fetch_types():
-        from app.utils.data_integration_clients import DatabaseClientFactory
-        return DatabaseClientFactory.get_supported_types()
-
-    types = await self.cache_manager.get_cached_data(
-        cache_key,
-        fetch_types,
-        {'redis': 3600}  # 1小时缓存
-    )
-
-    return types
-
-
-async def preview_data_source(self, source_name: str, table_name: str = None, database: str = None, limit: int = 10) -> \
-Dict[str, Any]:
-    """预览数据源数据"""
-    try:
-        client = self.connection_manager.get_client(source_name)
-        if not client:
-            return {
-                "success": False,
-                "error": f"数据源 {source_name} 不存在"
-            }
-
-        # 如果没有指定表名，获取第一个表
-        if not table_name:
-            tables_result = await self.get_tables(source_name, database)
-            if not tables_result.get('success') or not tables_result.get('tables'):
-                return {
-                    "success": False,
-                    "error": "没有可用的表进行预览"
-                }
-            # 获取第一个表的名称
-            tables = tables_result['tables']
-            if tables:
-                table_name = tables[0]['table_name']  # 修复：从tables结果中获取table_name
-            else:
-                return {
-                    "success": False,
-                    "error": "数据源中没有找到任何表"
-                }
-
-        # 执行查询预览
-        query = f"SELECT * FROM {table_name} LIMIT {limit}"
-        result = await self.execute_query(source_name, query, database, limit=limit)
-
-        if result.get('success'):
-            return {
-                "success": True,
-                "source_name": source_name,
-                "table_name": table_name,
-                "database": database,
-                "preview_data": result.get('results', []),
-                "row_count": len(result.get('results', [])),
-                "limit": limit
-            }
-        else:
-            return result
-
-    except Exception as e:
-        logger.error(f"预览数据源失败: {e}")
-        return {
-            "success": False,
-            "error": str(e)
-        }
-
-
-async def get_data_source_statistics(self, source_name: str) -> Dict[str, Any]:
-    """获取数据源统计信息 - 缓存优化"""
-    cache_key = f"statistics_{source_name}"
-
-    async def fetch_statistics():
-        # 获取数据库列表
-        databases_result = await self.get_databases(source_name)
-        if not databases_result.get('success'):
-            return {
-                "success": False,
-                "error": databases_result.get('error', '数据源不存在')
-            }
-
-        databases = databases_result.get('databases', [])
-        total_tables = 0
-        tables_by_database = {}
-
-        # 并行统计每个数据库的表数量
-        table_tasks = []
-        for db in databases[:5]:  # 限制并发数，只统计前5个数据库
-            table_tasks.append(self._count_tables_in_database(source_name, db))
-
-        table_results = await asyncio.gather(*table_tasks, return_exceptions=True)
-
-        for i, (db, result) in enumerate(zip(databases[:5], table_results)):
-            if isinstance(result, dict) and result.get('success'):
-                db_table_count = result.get('count', 0)
-                total_tables += db_table_count
-                tables_by_database[db] = db_table_count
-            else:
-                tables_by_database[db] = 0
-
-        # 测试连接状态
-        test_result = await self.test_data_source(source_name)
-
-        statistics = {
-            "source_name": source_name,
-            "connection_status": "connected" if test_result.get('success') else "disconnected",
-            "database_type": test_result.get('database_type', '未知'),
-            "version": test_result.get('version', '未知'),
-            "total_databases": len(databases),
-            "total_tables": total_tables,
-            "tables_by_database": tables_by_database,
-            "last_test": test_result.get('test_time', datetime.now()),
-            "response_time_ms": test_result.get('response_time_ms', 0),
-            "collected_at": datetime.now()
-        }
-
-        if not test_result.get('success'):
-            statistics["error"] = test_result.get('error', '连接失败')
-
-        return {
-            "success": True,
-            **statistics
-        }
-
-    return await self.cache_manager.get_cached_data(
-        cache_key,
-        fetch_statistics,
-        {'redis': 900}  # 15分钟缓存
-    )
-
-
-async def _count_tables_in_database(self, source_name: str, database: str) -> Dict[str, Any]:
-    """统计单个数据库的表数量"""
-    try:
-        tables_result = await self.get_tables(source_name, database)
-        return tables_result
-    except Exception as e:
-        return {"success": False, "error": str(e), "count": 0}
-
-
-# Excel相关方法
-async def upload_excel_source(self, name: str, file, description: str = None) -> Dict[str, Any]:
-    """上传Excel文件创建数据源"""
-    try:
-        from app.utils.data_integration_clients import excel_service
-
-        # 验证文件类型
-        if not file.filename.lower().endswith(('.xlsx', '.xls')):
-            return {
-                "success": False,
-                "error": "不支持的文件类型，请上传.xlsx或.xls文件"
-            }
-
-        # 验证文件大小 (限制为50MB)
-        content = await file.read()
-        file_size = len(content)
-        await file.seek(0)  # 重置文件指针
-
-        if file_size > 50 * 1024 * 1024:  # 50MB
-            return {
-                "success": False,
-                "error": "文件大小超过限制（50MB）"
-            }
-
-        # 创建Excel数据源
-        result = await excel_service.create_excel_source(name, file, description)
-
-        if result.get('success'):
-            # 添加到连接管理器
-            config = result['config']
-            add_result = await self.add_data_source(
-                name=name,
-                db_type='excel',
-                config=config
-            )
-
-            if add_result.get('success'):
-                # 清除相关缓存
-                await self.cache_manager.invalidate_cache(pattern="overview")
-
-                return {
-                    "success": True,
-                    "source_info": add_result,
-                    "upload_info": result['upload_info']
-                }
-            else:
-                # 如果添加数据源失败，删除上传的文件
-                await excel_service.delete_excel_source(config)
-                return {
-                    "success": False,
-                    "error": add_result.get('error', '创建数据源失败')
-                }
-        else:
-            return result
-
-    except Exception as e:
-        logger.error(f"上传Excel文件失败: {e}")
-        return {
-            "success": False,
-            "error": str(e)
-        }
-
-
-async def list_excel_files(self) -> List[Dict[str, Any]]:
-    """获取已上传的Excel文件列表"""
-    try:
-        upload_dir = Path(settings.UPLOAD_DIR)
-        if not upload_dir.exists():
-            upload_dir.mkdir(parents=True, exist_ok=True)  # 创建目录如果不存在
-            return []
-
-        excel_files = []
-        # 搜索Excel文件
-        for pattern in ["*.xlsx", "*.xls"]:
-            for file_path in upload_dir.glob(pattern):
-                try:
-                    stat = file_path.stat()
-                    excel_files.append({
-                        "filename": file_path.name,
-                        "size": stat.st_size,
-                        "size_mb": round(stat.st_size / (1024 * 1024), 2),
-                        "modified": datetime.fromtimestamp(stat.st_mtime),
-                        "path": str(file_path),
-                        "extension": file_path.suffix
-                    })
-                except Exception as e:
-                    logger.warning(f"读取文件信息失败 {file_path}: {e}")
-                    continue
-
-        # 按修改时间排序
-        excel_files.sort(key=lambda x: x['modified'], reverse=True)
-        return excel_files
-
-    except Exception as e:
-        logger.error(f"获取Excel文件列表失败: {e}")
-        return []
-
-
-async def get_excel_sheets(self, source_name: str) -> Dict[str, Any]:
-    """获取Excel工作表列表"""
-    try:
-        result = await self.get_tables(source_name)
-        return result
-    except Exception as e:
-        logger.error(f"获取Excel工作表列表失败: {e}")
-        return {
-            "success": False,
-            "error": str(e)
-        }
-
-
-async def preview_excel_sheet(self, source_name: str, sheet_name: str, limit: int = 10) -> Dict[str, Any]:
-    """预览Excel工作表数据"""
-    try:
-        client = self.connection_manager.get_client(source_name)
-        if not client:
-            return {
-                "success": False,
-                "error": f"数据源 {source_name} 不存在"
-            }
-
-        # 检查是否为Excel客户端
-        if not hasattr(client, 'get_data_preview'):
-            return {
-                "success": False,
-                "error": "该数据源不支持预览功能"
-            }
-
-        result = await client.get_data_preview(sheet_name, limit)
-        return result
-    except Exception as e:
-        logger.error(f"预览Excel工作表失败: {e}")
-        return {
-            "success": False,
-            "error": str(e)
-        }
-
-
-async def delete_excel_source(self, source_name: str) -> Dict[str, Any]:
-    """删除Excel数据源和对应的文件"""
-    try:
-        client = self.connection_manager.get_client(source_name)
-        if not client:
-            return {
-                "success": False,
-                "error": f"数据源 {source_name} 不存在"
-            }
-
-        # 获取文件配置
-        config = client.config if hasattr(client, 'config') else {}
-
-        # 删除文件
-        from app.utils.data_integration_clients import excel_service
-        delete_result = await excel_service.delete_excel_source(config)
-
-        # 删除数据源
-        source_result = await self.remove_data_source(source_name)
-
-        return {
-            "success": True,
-            "file_deleted": delete_result.get('success', False),
-            "source_deleted": source_result.get('success', False),
-            "file_message": delete_result.get('message', ''),
-            "source_message": source_result.get('message', '')
-        }
-    except Exception as e:
-        logger.error(f"删除Excel数据源失败: {e}")
-        return {
-            "success": False,
-            "error": str(e)
-        }
-
-
-async def export_excel_sheet(self, source_name: str, sheet_name: str, export_format: str = "json", limit: int = None) -> \
-Dict[str, Any]:
-    """导出Excel工作表数据"""
-    try:
-        # 构建查询
-        query = f"SELECT * FROM {sheet_name}"
-        if limit:
-            query += f" LIMIT {limit}"
-
-        result = await self.execute_query(
-            source_name=source_name,
-            query=query,
-            limit=limit or 1000
-        )
-
-        if result.get('success'):
-            data = result['results']
-
-            return {
-                "success": True,
-                "sheet_name": sheet_name,
-                "export_format": export_format,
-                "data": data,
-                "row_count": len(data),
-                "exported_at": datetime.now()
-            }
-        else:
-            return result
-
-    except Exception as e:
-        logger.error(f"导出Excel工作表失败: {e}")
-        return {
-            "success": False,
-            "error": str(e)
-        }
-
-async def _load_real_cluster_connections(self):
-    """加载真实集群连接"""
-    try:
-        # 加载Hive连接
-        if settings.HIVE_SERVER_HOST:
-            hive_config = {
-                "host": settings.HIVE_SERVER_HOST,
-                "port": settings.HIVE_SERVER_PORT,
-                "username": settings.HIVE_USERNAME,
-                "password": settings.HIVE_PASSWORD,
-                "database": settings.HIVE_DATABASE or "default"
-            }
-            self.connection_manager.add_client("Production-Hive", "hive", hive_config)
-            logger.info("✅ 加载Hive生产连接")
-
-        # 加载HDFS连接（如果有客户端支持）
-        if settings.HDFS_NAMENODE:
-            hdfs_config = {
-                "namenode": settings.HDFS_NAMENODE,
-                "user": settings.HDFS_USER
-            }
-            # 如果有HDFS客户端实现，在这里添加
-            logger.info("✅ HDFS配置已读取")
-
-    except Exception as e:
-        logger.error(f"加载真实集群连接失败: {e}")
-
-
-async def _get_production_fallback_overview(self) -> Dict[str, Any]:
-    """生产环境备用概览数据"""
-    return {
-        "total_sources": 2,
-        "active_connections": 1,
-        "failed_connections": 1,
-        "supported_types": DatabaseClientFactory.get_supported_types(),
-        "sources_by_type": {"hive": 1, "hdfs": 1},
-        "data_volume_estimate": "100.0GB",
-        "last_sync": datetime.now(),
-        "health_status": "部分异常",
-        "error": "部分数据源连接失败",
-        "cluster_info": {
-            "hive_host": settings.HIVE_SERVER_HOST,
-            "hdfs_namenode": settings.HDFS_NAMENODE
-        }
-    }
