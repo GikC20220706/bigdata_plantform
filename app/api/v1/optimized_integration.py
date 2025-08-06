@@ -119,9 +119,9 @@ async def get_databases(source_name: str):
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.get("/sources/{source_name}/tables", summary="获取表列表")
-async def get_tables(source_name: str, database: Optional[str] = Query(None, description="数据库名称")):
+async def get_tables(source_name: str, database: Optional[str] = Query(None, description="数据库名称"),schema: Optional[str] = Query(None, description="Schema名称")):
     try:
-        result = await optimized_data_integration_service.get_tables(source_name, database)
+        result = await optimized_data_integration_service.get_tables(source_name, database,schema)
         if result.get('success'):
             return create_response(data=result, message=f"获取 {source_name} 表列表成功")
         else:
@@ -131,9 +131,9 @@ async def get_tables(source_name: str, database: Optional[str] = Query(None, des
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.get("/sources/{source_name}/tables/{table_name}/schema", summary="获取表结构")
-async def get_table_schema(source_name: str, table_name: str, database: Optional[str] = Query(None, description="数据库名称")):
+async def get_table_schema(source_name: str, table_name: str, database: Optional[str] = Query(None, description="数据库名称"),schema: Optional[str] = Query(None, description="Schema名称")):
     try:
-        result = await optimized_data_integration_service.get_table_schema(source_name, table_name, database)
+        result = await optimized_data_integration_service.get_table_schema(source_name, table_name, database,schema)
         if result.get('success'):
             return create_response(data=result, message=f"获取表 {table_name} 结构成功")
         else:
@@ -143,9 +143,10 @@ async def get_table_schema(source_name: str, table_name: str, database: Optional
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.get("/sources/{source_name}/tables/{table_name}/metadata", summary="获取表元数据")
-async def get_table_metadata(source_name: str, table_name: str, database: Optional[str] = Query(None, description="数据库名称")):
+async def get_table_metadata(source_name: str, table_name: str, database: Optional[str] = Query(None, description="数据库名称"),
+    schema: Optional[str] = Query(None, description="Schema名称")):
     try:
-        result = await optimized_data_integration_service.get_table_metadata(source_name, table_name, database)
+        result = await optimized_data_integration_service.get_table_metadata(source_name, table_name, database,schema)
         if result.get('success'):
             return create_response(data=result, message=f"获取表 {table_name} 元数据成功")
         else:

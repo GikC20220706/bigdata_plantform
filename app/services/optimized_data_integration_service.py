@@ -80,7 +80,7 @@ class OptimizedDataIntegrationService:
             logger.info("将继续启动，但需要手动配置数据源连接")
 
     @cache_table_schema(ttl=1800)  # 30分钟缓存
-    async def get_table_schema(self, source_name: str, table_name: str, database: str = None) -> Dict[str, Any]:
+    async def get_table_schema(self, source_name: str, table_name: str, database: str = None, schema: str = None) -> Dict[str, Any]:
         """获取表结构 - 长期缓存"""
         try:
             client = self.connection_manager.get_client(source_name)
@@ -90,7 +90,7 @@ class OptimizedDataIntegrationService:
                     "error": f"数据源 {source_name} 不存在"
                 }
 
-            schema = await client.get_table_schema(table_name, database)
+            schema = await client.get_table_schema(table_name, database,schema)
             return {
                 "success": True,
                 "source_name": source_name,
@@ -395,7 +395,7 @@ class OptimizedDataIntegrationService:
             {'redis': 600}  # 10分钟缓存
         )
 
-    async def get_tables(self, source_name: str, database: str = None) -> Dict[str, Any]:
+    async def get_tables(self, source_name: str, database: str = None, schema: str = None) -> Dict[str, Any]:
         """获取表列表 - 添加缓存"""
         cache_key = f"tables_{source_name}_{database or 'default'}"
 
@@ -407,7 +407,7 @@ class OptimizedDataIntegrationService:
                     "error": f"数据源 {source_name} 不存在"
                 }
 
-            tables = await client.get_tables(database)
+            tables = await client.get_tables(database,schema)
             return {
                 "success": True,
                 "source_name": source_name,
@@ -557,26 +557,25 @@ class OptimizedDataIntegrationService:
 
     async def add_data_source(self, name: str, db_type: str, config: Dict[str, Any], description: str = "") -> Dict[
         str, Any]:
-        """添加数据源"""
         try:
             logger.info(f"开始添加数据源: name={name}, type={db_type}")
 
-            # 验证参数
+            # 1. 参数验证
             if not name or not db_type or not config:
                 return {
                     "success": False,
                     "error": "参数不完整: 需要name, db_type, config"
                 }
 
-            # 检查数据源是否已存在
+            # 2. 检查数据源是否已存在
             if self.connection_manager.get_client(name):
                 return {
                     "success": False,
                     "error": f"数据源 '{name}' 已存在"
                 }
 
-            # 添加到连接管理器
-            logger.info(f"添加到连接管理器: {name}")
+            # 3. 临时添加到连接管理器进行测试
+            logger.info(f"临时添加到连接管理器: {name}")
             success = self.connection_manager.add_client(name, db_type, config)
             if not success:
                 return {
@@ -584,48 +583,93 @@ class OptimizedDataIntegrationService:
                     "error": f"不支持的数据库类型: {db_type}"
                 }
 
-            # 测试连接
-            logger.info(f"测试连接: {name}")
+            # 4. 测试连接 - 关键步骤
+            logger.info(f"开始连接测试: {name}")
             client = self.connection_manager.get_client(name)
             test_result = await client.test_connection()
 
-            # 保存到数据库
+            logger.info(f"连接测试结果: {name} -> {test_result.get('success', False)}")
+
+            # 5. 关键修复：连接测试失败时的处理
+            if not test_result.get('success'):
+                error_msg = test_result.get('error', '未知连接错误')
+                logger.warning(f"连接测试失败: {name}, 原因: {error_msg}")
+
+                # 从连接管理器中移除失败的连接
+                try:
+                    self.connection_manager.remove_client(name)
+                    logger.info(f"已清理失败的连接: {name}")
+                except Exception as remove_error:
+                    logger.error(f"清理失败连接时出错: {remove_error}")
+
+                # 返回失败结果
+                return {
+                    "success": False,
+                    "error": f"数据源连接测试失败: {error_msg}",
+                    "test_result": test_result,
+                    "connection_details": {
+                        "host": config.get('host'),
+                        "port": config.get('port'),
+                        "database": config.get('database')
+                    }
+                }
+
+            # 6. 连接测试成功 - 保存到数据库
+            logger.info(f"连接测试成功，开始保存到数据库: {name}")
             try:
                 await self._save_data_source_to_db(name, db_type, config, test_result, description)
-                logger.info(f"保存到数据库成功: {name}")
+                logger.info(f"数据源保存到数据库成功: {name}")
             except Exception as db_error:
-                logger.error(f"保存到数据库失败: {db_error}")
-                # 即使数据库保存失败，也不影响内存中的连接
+                logger.error(f"保存到数据库失败: {name}, 错误: {db_error}")
 
-            # 清除相关缓存
+                # 数据库保存失败，清理连接管理器
+                try:
+                    self.connection_manager.remove_client(name)
+                    logger.info(f"已清理保存失败的连接: {name}")
+                except Exception as cleanup_error:
+                    logger.error(f"清理连接时出错: {cleanup_error}")
+
+                return {
+                    "success": False,
+                    "error": f"保存数据源配置失败: {str(db_error)}",
+                    "test_result": test_result
+                }
+
+            # 7. 清除相关缓存
             try:
                 await self.cache_manager.invalidate_cache(pattern=name)
                 await self.cache_manager.invalidate_cache(pattern="overview")
+                logger.info(f"缓存清理成功: {name}")
             except Exception as cache_error:
                 logger.warning(f"清除缓存失败: {cache_error}")
 
+            # 8. 成功完成
+            logger.info(f"🎉 数据源添加完全成功: {name}")
             return {
                 "success": True,
                 "name": name,
                 "type": db_type,
+                "status": "connected",
                 "test_result": test_result,
-                "created_at": datetime.now()
+                "created_at": datetime.now(),
+                "message": "数据源连接测试成功并已保存"
             }
 
         except Exception as e:
-            logger.error(f"添加数据源失败 {name}: {e}")
+            logger.error(f"❌ 添加数据源异常 {name}: {e}")
             import traceback
-            logger.error(traceback.format_exc())
+            logger.error(f"异常堆栈: {traceback.format_exc()}")
 
-            # 如果出错，从连接管理器中移除
+            # 异常情况下清理连接管理器
             try:
                 self.connection_manager.remove_client(name)
-            except:
-                pass
+                logger.info(f"✅ 异常清理连接成功: {name}")
+            except Exception as cleanup_error:
+                logger.error(f"⚠️ 异常清理连接失败: {cleanup_error}")
 
             return {
                 "success": False,
-                "error": str(e)
+                "error": f"添加数据源时发生异常: {str(e)}"
             }
 
     async def _save_data_source_to_db(self, name: str, db_type: str, config: Dict[str, Any],
@@ -825,7 +869,7 @@ class OptimizedDataIntegrationService:
         except Exception as e:
             logger.error(f"从数据库删除数据源失败: {e}")
 
-    async def get_table_metadata(self, source_name: str, table_name: str, database: str = None) -> Dict[str, Any]:
+    async def get_table_metadata(self, source_name: str, table_name: str, database: str = None, schema: str = None) -> Dict[str, Any]:
         """获取表的完整元数据 - 缓存优化"""
         cache_key = f"metadata_{source_name}_{database or 'default'}_{table_name}"
 
@@ -837,7 +881,7 @@ class OptimizedDataIntegrationService:
                     "error": f"数据源 {source_name} 不存在"
                 }
 
-            metadata = await client.get_table_metadata(table_name, database)
+            metadata = await client.get_table_metadata(table_name, database,schema)
             return {
                 "success": True,
                 "source_name": source_name,
