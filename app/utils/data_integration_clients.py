@@ -185,7 +185,7 @@ class MySQLClient(DatabaseClient):
             logger.error(f"获取MySQL数据库列表失败: {e}")
             return []
 
-    async def get_tables(self, database: str = None, schema: str = None) -> List[Dict[str, Any]]:
+    async def get_tables(self, database: str = None, schema: str = None, limit: int = 100, offset: int = 0) -> List[Dict[str, Any]]:
         """获取MySQL表列表"""
         try:
             pool = await self._get_connection_pool()
@@ -331,6 +331,8 @@ class KingbaseClient(DatabaseClient):
             'user': config['username'],
             'password': config['password'],
             'database': config.get('database', 'test'),
+            'connect_timeout': 5,  # 连接超时5秒
+            'options': '-c statement_timeout=10000'  # SQL执行超时10秒
         }
 
     def _get_connection(self):
@@ -387,61 +389,80 @@ class KingbaseClient(DatabaseClient):
             logger.error(f"获取Kingbase数据库列表失败: {e}")
             return []
 
-    async def get_tables(self, database: str = None, schema: str = None) -> List[Dict[str, Any]]:
-        """获取人大金仓表列表"""
+    async def get_tables(self, database: str = None, schema: str = None, limit: int = 100, offset: int = 0) -> List[
+        Dict[str, Any]]:
+        """获取人大金仓表列表 - 支持分页"""
+        conn = None
+        cursor = None
         try:
-            logger.info(f"KingBase get_tables: database={database}, schema={schema}")
+            logger.info(f"KingBase get_tables: database={database}, schema={schema}, limit={limit}, offset={offset}")
+
+            # 创建新连接
             conn = ksycopg2.connect(**self._connection_params)
             conn.autocommit = True
             cursor = conn.cursor(cursor_factory=ksycopg2.extras.RealDictCursor)
-            # 获取当前schema
-            cursor.execute("SELECT current_schema() as schema_name")
-            result = cursor.fetchone()
-            current_schema = result['schema_name'] if result else 'public'
 
-            # 如果指定了数据库，需要切换连接
-            if database and database != self._connection_params['database']:
-                conn.close()
-                temp_params = self._connection_params.copy()
-                temp_params['database'] = database
-                conn = ksycopg2.connect(**temp_params)
-                conn.autocommit = True
-                cursor = conn.cursor(cursor_factory=ksycopg2.extras.RealDictCursor)
-            if not current_schema:
-                current_schema = 'public'
+            if not schema:
+                schema = 'public'
 
+            # 分页查询表列表
             cursor.execute("""
-                SELECT 
-                    t.table_name,
-                    t.table_type,
-                    c.reltuples as estimated_rows,
-                    sys_total_relation_size(c.oid) as data_size,
-                    obj_description(c.oid) as comment
-                FROM information_schema.tables t
-                LEFT JOIN sys_class c ON c.relname = t.table_name
-                WHERE t.table_schema = %s
-                AND t.table_type = 'BASE TABLE'
-                ORDER BY t.table_name
-            """,(current_schema,))
+                SELECT table_name, table_type 
+                FROM information_schema.tables 
+                WHERE table_schema = %s AND table_type = 'BASE TABLE'
+                ORDER BY table_name
+                LIMIT %s OFFSET %s
+            """, (schema, limit, offset))
+
             results = cursor.fetchall()
-            cursor.close()
 
             tables = []
             for row in results:
                 tables.append({
                     "table_name": row['table_name'],
                     "table_type": row['table_type'],
-                    "estimated_rows": int(row['estimated_rows'] or 0),
-                    "data_size": int(row['data_size'] or 0),
-                    "comment": row['comment'] or ""
+                    "estimated_rows": 0,
+                    "data_size": 0,
+                    "comment": ""
                 })
+
+            logger.info(f"KingBase查询完成: 返回{len(tables)}张表")
             return tables
+
         except Exception as e:
-            logger.error(f"获取Kingbase表列表失败，详细错误: {type(e).__name__}: {str(e)}")
-            import traceback
-            logger.error(f"完整堆栈: {traceback.format_exc()}")
+            logger.error(f"获取Kingbase表列表失败: {e}")
+            return []
         finally:
-            # 确保资源清理
+            if cursor:
+                cursor.close()
+            if conn:
+                conn.close()
+
+    async def get_tables_count(self, database: str = None, schema: str = None) -> int:
+        """获取表总数"""
+        conn = None
+        cursor = None
+        try:
+            conn = ksycopg2.connect(**self._connection_params)
+            conn.autocommit = True
+            cursor = conn.cursor()
+
+            if not schema:
+                schema = 'public'
+
+            cursor.execute("""
+                SELECT COUNT(*) 
+                FROM information_schema.tables 
+                WHERE table_schema = %s AND table_type = 'BASE TABLE'
+            """, (schema,))
+
+            count = cursor.fetchone()[0]
+            return count
+
+        except Exception as e:
+            logger.error(f"获取Kingbase表总数失败: {e}")
+            return 0
+        finally:
             if cursor:
                 cursor.close()
             if conn:
@@ -627,7 +648,7 @@ class DorisClient(DatabaseClient):
             logger.error(f"获取Doris数据库列表失败: {e}")
             return []
 
-    async def get_tables(self, database: str = None, schema: str = None) -> List[Dict[str, Any]]:
+    async def get_tables(self, database: str = None, schema: str = None, limit: int = 100, offset: int = 0) -> List[Dict[str, Any]]:
         """获取Doris表列表"""
         try:
             pool = await self._get_connection_pool()
@@ -721,7 +742,7 @@ class DorisClient(DatabaseClient):
             logger.error(f"获取Doris表结构失败 {table_name}: {e}")
             return {"columns": [], "indexes": [], "error": str(e)}
 
-    async def execute_query(self, query: str, database: str = None) -> List[Dict[str, Any]]:
+    async def execute_query(self, query: str, database: str = None, schema: str = None, limit: int = 100) -> List[Dict[str, Any]]:
         """执行Doris查询"""
         try:
             pool = await self._get_connection_pool()
@@ -787,7 +808,7 @@ class DamengClient(DatabaseClient):
             logger.error(f"获取Dameng数据库列表失败: {e}")
             return []
 
-    async def get_tables(self, database: str = None, schema: str = None) -> List[Dict[str, Any]]:
+    async def get_tables(self, database: str = None, schema: str = None, limit: int = 100, offset: int = 0) -> List[Dict[str, Any]]:
         """获取达梦表列表"""
         try:
             engine = self._get_engine()
@@ -884,7 +905,7 @@ class DamengClient(DatabaseClient):
             logger.error(f"获取Dameng表结构失败 {table_name}: {e}")
             return {"columns": [], "indexes": [], "error": str(e)}
 
-    async def execute_query(self, query: str, database: str = None) -> List[Dict[str, Any]]:
+    async def execute_query(self, query: str, database: str = None, schema: str = None, limit: int = 100) -> List[Dict[str, Any]]:
         """执行达梦查询"""
         try:
             engine = self._get_engine()
@@ -947,7 +968,7 @@ class GBaseClient(DatabaseClient):
             logger.error(f"获取GBase数据库列表失败: {e}")
             return []
 
-    async def get_tables(self, database: str = None, schema: str = None) -> List[Dict[str, Any]]:
+    async def get_tables(self, database: str = None, schema: str = None, limit: int = 100, offset: int = 0) -> List[Dict[str, Any]]:
         """获取GBase表列表"""
         try:
             pool = await self._get_connection_pool()
@@ -1051,7 +1072,7 @@ class GBaseClient(DatabaseClient):
             logger.error(f"获取GBase表结构失败 {table_name}: {e}")
             return {"columns": [], "indexes": [], "error": str(e)}
 
-    async def execute_query(self, query: str, database: str = None) -> List[Dict[str, Any]]:
+    async def execute_query(self, query: str, database: str = None, schema: str = None, limit: int = 100) -> List[Dict[str, Any]]:
         """执行GBase查询"""
         try:
             pool = await self._get_connection_pool()
@@ -1125,7 +1146,7 @@ class TiDBClient(DatabaseClient):
             logger.error(f"获取TiDB数据库列表失败: {e}")
             return []
 
-    async def get_tables(self, database: str = None, schema: str = None) -> List[Dict[str, Any]]:
+    async def get_tables(self, database: str = None, schema: str = None, limit: int = 100, offset: int = 0) -> List[Dict[str, Any]]:
         """获取TiDB表列表"""
         try:
             pool = await self._get_connection_pool()
@@ -1253,7 +1274,7 @@ class TiDBClient(DatabaseClient):
             logger.error(f"获取TiDB表结构失败 {table_name}: {e}")
             return {"columns": [], "indexes": [], "error": str(e)}
 
-    async def execute_query(self, query: str, database: str = None) -> List[Dict[str, Any]]:
+    async def execute_query(self, query: str, database: str = None, schema: str = None, limit: int = 100) -> List[Dict[str, Any]]:
         """执行TiDB查询"""
         try:
             pool = await self._get_connection_pool()
@@ -1332,7 +1353,7 @@ class HiveClient(DatabaseClient):
             logger.error(f"获取Hive数据库列表失败: {e}")
             return []
 
-    async def get_tables(self, database: str = None, schema: str = None) -> List[Dict[str, Any]]:
+    async def get_tables(self, database: str = None, schema: str = None, limit: int = 100, offset: int = 0) -> List[Dict[str, Any]]:
         """获取Hive表列表"""
         try:
             conn = self._get_connection()
@@ -1447,7 +1468,7 @@ class HiveClient(DatabaseClient):
             logger.error(f"获取Hive表结构失败 {table_name}: {e}")
             return {"columns": [], "partitions": [], "error": str(e)}
 
-    async def execute_query(self, query: str, database: str = None) -> List[Dict[str, Any]]:
+    async def execute_query(self, query: str, database: str = None, schema: str = None, limit: int = 100) -> List[Dict[str, Any]]:
         """执行Hive查询"""
         try:
             conn = self._get_connection()
@@ -1549,7 +1570,7 @@ class ExcelClient(DatabaseClient):
             logger.error(f"获取Excel文件信息失败: {e}")
             return []
 
-    async def get_tables(self, database: str = None, schema: str = None) -> List[Dict[str, Any]]:
+    async def get_tables(self, database: str = None, schema: str = None, limit: int = 100, offset: int = 0) -> List[Dict[str, Any]]:
         """获取工作表列表"""
         try:
             if not os.path.exists(self.file_path):
@@ -1627,7 +1648,7 @@ class ExcelClient(DatabaseClient):
             logger.error(f"获取Excel工作表结构失败 {table_name}: {e}")
             return {"columns": [], "error": str(e)}
 
-    async def execute_query(self, query: str, database: str = None) -> List[Dict[str, Any]]:
+    async def execute_query(self, query: str, database: str = None, schema: str = None, limit: int = 100) -> List[Dict[str, Any]]:
         """执行Excel查询（简单的数据读取）"""
         try:
             # 解析简单的查询语句

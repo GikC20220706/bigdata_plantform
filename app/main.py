@@ -56,30 +56,30 @@ async def lifespan(app: FastAPI):
             # 使用同步版本
             if test_connection():
                 create_tables_sync()
-                logger.info("✅ MySQL database initialized")
+                logger.info("MySQL database initialized")
             else:
-                logger.warning("⚠️ Database connection test failed")
+                logger.warning(" Database connection test failed")
         except Exception as e:
-            logger.warning(f"⚠️ Database initialization failed: {e}")
+            logger.warning(f"Database initialization failed: {e}")
             create_tables_sync()
-            logger.info("✅ MySQL database initialized")
+            logger.info("MySQL database initialized")
         else:
-            logger.warning("⚠️ Database connection test failed")
+            logger.warning("Database connection test failed")
     except Exception as e:
-        logger.warning(f"⚠️ Database initialization failed: {e}")
+        logger.warning(f"Database initialization failed: {e}")
 
         # 初始化数据集成缓存
     try:
         from app.utils.integration_cache import integration_cache
-        logger.info("✅ Integration cache manager initialized")
-        logger.info(f"📊 Cache levels: Memory(60s) → Redis(5m) → DB(1h)")
+        logger.info("Integration cache manager initialized")
+        logger.info(f"Cache levels: Memory(60s) → Redis(5m) → DB(1h)")
     except Exception as e:
-        logger.warning(f"⚠️ Integration cache initialization failed: {e}")
+        logger.warning(f"Integration cache initialization failed: {e}")
 
         # 初始化优化的数据集成服务
     try:
         from app.services.optimized_data_integration_service import optimized_data_integration_service
-        logger.info("✅ Optimized data integration service initialized")
+        logger.info("Optimized data integration service initialized")
 
         # 预热关键缓存（后台执行）
         import asyncio
@@ -151,11 +151,11 @@ async def warm_critical_cache():
         logger.info("✅ Integration overview cache warmed")
 
         # 预热数据源列表
-        await optimized_data_integration_service.get_data_sources_list()
-        logger.info("✅ Data sources list cache warmed")
+        #await optimized_data_integration_service.get_data_sources_list()
+        #logger.info("✅ Data sources list cache warmed")
 
     except Exception as e:
-        logger.warning(f"⚠️ Cache warming failed: {e}")
+        logger.warning(f"Cache warming failed: {e}")
 
 
 def create_app() -> FastAPI:

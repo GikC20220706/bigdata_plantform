@@ -395,9 +395,11 @@ class OptimizedDataIntegrationService:
             {'redis': 600}  # 10分钟缓存
         )
 
-    async def get_tables(self, source_name: str, database: str = None, schema: str = None) -> Dict[str, Any]:
-        """获取表列表 - 添加缓存"""
-        cache_key = f"tables_{source_name}_{database or 'default'}"
+    async def get_tables(self, source_name: str, database: str = None, schema: str = None,
+                         limit: int = 100, offset: int = 0) -> Dict[str, Any]:
+        """获取表列表 - 添加缓存和分页支持"""
+        # 缓存key包含分页信息
+        cache_key = f"tables_{source_name}_{database or 'default'}_{schema or 'default'}_{limit}_{offset}"
 
         async def fetch_tables():
             client = self.connection_manager.get_client(source_name)
@@ -407,13 +409,32 @@ class OptimizedDataIntegrationService:
                     "error": f"数据源 {source_name} 不存在"
                 }
 
-            tables = await client.get_tables(database,schema)
+            # 调用客户端的分页方法
+            tables = await client.get_tables(database, schema, limit, offset)
+
+            # 获取总数（如果客户端支持）
+            total_count = 0
+            if hasattr(client, 'get_tables_count'):
+                total_count = await client.get_tables_count(database, schema)
+            else:
+                # 如果客户端不支持get_tables_count，估算总数
+                if len(tables) == limit:
+                    # 如果返回的数量等于limit，说明可能还有更多数据
+                    total_count = offset + len(tables) + 1  # 估算值
+                else:
+                    total_count = offset + len(tables)  # 实际总数
+
             return {
                 "success": True,
                 "source_name": source_name,
                 "database": database,
+                "schema": schema,
                 "tables": tables,
                 "count": len(tables),
+                "total_count": total_count,
+                "limit": limit,
+                "offset": offset,
+                "has_more": offset + len(tables) < total_count,
                 "retrieved_at": datetime.now()
             }
 
@@ -421,6 +442,37 @@ class OptimizedDataIntegrationService:
             cache_key,
             fetch_tables,
             {'redis': 300}  # 5分钟缓存
+        )
+
+    # 可选：添加获取总数的独立方法（用于前端分页计算）
+    async def get_tables_count(self, source_name: str, database: str = None, schema: str = None) -> Dict[str, Any]:
+        """获取表总数"""
+        cache_key = f"tables_count_{source_name}_{database or 'default'}_{schema or 'default'}"
+
+        async def fetch_count():
+            client = self.connection_manager.get_client(source_name)
+            if not client:
+                return {"success": False, "error": f"数据源 {source_name} 不存在"}
+
+            if hasattr(client, 'get_tables_count'):
+                count = await client.get_tables_count(database, schema)
+            else:
+                # 降级：获取所有表然后计数（适用于表不多的情况）
+                tables = await client.get_tables(database, schema, 999999, 0)
+                count = len(tables)
+
+            return {
+                "success": True,
+                "source_name": source_name,
+                "database": database,
+                "schema": schema,
+                "total_count": count
+            }
+
+        return await self.cache_manager.get_cached_data(
+            cache_key,
+            fetch_count,
+            {'redis': 600}  # 10分钟缓存（总数变化较少）
         )
 
     async def get_data_sources_overview(self) -> Dict[str, Any]:
@@ -644,7 +696,7 @@ class OptimizedDataIntegrationService:
                 logger.warning(f"清除缓存失败: {cache_error}")
 
             # 8. 成功完成
-            logger.info(f"🎉 数据源添加完全成功: {name}")
+            logger.info(f"数据源添加完全成功: {name}")
             return {
                 "success": True,
                 "name": name,

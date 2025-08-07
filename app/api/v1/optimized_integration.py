@@ -119,9 +119,17 @@ async def get_databases(source_name: str):
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.get("/sources/{source_name}/tables", summary="获取表列表")
-async def get_tables(source_name: str, database: Optional[str] = Query(None, description="数据库名称"),schema: Optional[str] = Query(None, description="Schema名称")):
+async def get_tables(
+    source_name: str,
+    database: Optional[str] = Query(None, description="数据库名称"),
+    schema: Optional[str] = Query(None, description="Schema名称"),
+    limit: int = Query(100, ge=1, le=1000, description="每页数量"),
+    offset: int = Query(0, ge=0, description="偏移量")
+):
     try:
-        result = await optimized_data_integration_service.get_tables(source_name, database,schema)
+        result = await optimized_data_integration_service.get_tables(
+            source_name, database, schema, limit, offset
+        )
         if result.get('success'):
             return create_response(data=result, message=f"获取 {source_name} 表列表成功")
         else:
@@ -129,7 +137,6 @@ async def get_tables(source_name: str, database: Optional[str] = Query(None, des
     except Exception as e:
         logger.error(f"获取表列表失败: {e}")
         raise HTTPException(status_code=500, detail=str(e))
-
 @router.get("/sources/{source_name}/tables/{table_name}/schema", summary="获取表结构")
 async def get_table_schema(source_name: str, table_name: str, database: Optional[str] = Query(None, description="数据库名称"),schema: Optional[str] = Query(None, description="Schema名称")):
     try:
