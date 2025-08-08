@@ -21,7 +21,7 @@ from app.utils.integration_cache import (
     cache_data_preview
 )
 from app.models.data_source import DataSource, DataSourceConnection
-from app.utils.database import get_db
+from app.utils.database import get_async_db
 from config.settings import settings
 from sqlalchemy import text
 
@@ -257,7 +257,7 @@ class OptimizedDataIntegrationService:
                 table_count = tables_result.get('count', 0)
 
                 # 更新数据库记录
-                db = next(get_db())
+                db = next(get_async_db())
                 data_source = db.query(DataSource).filter(DataSource.name == source_name).first()
                 if data_source:
                     # 这里可以添加表数量等统计字段到数据源模型
@@ -820,7 +820,7 @@ class OptimizedDataIntegrationService:
     async def _record_connection_test(self, name: str, test_result: Dict[str, Any]):
         """异步记录连接测试结果"""
         try:
-            db = next(get_db())
+            db = next(get_async_db())
             data_source = db.query(DataSource).filter(DataSource.name == name).first()
 
             if data_source:
@@ -890,7 +890,7 @@ class OptimizedDataIntegrationService:
     async def _remove_data_source_from_db(self, name: str) -> bool:
         """从数据库删除数据源（软删除）"""
         try:
-            db = next(get_db())
+            db = next(get_async_db())
             data_source = db.query(DataSource).filter(DataSource.name == name).first()
 
             if data_source:

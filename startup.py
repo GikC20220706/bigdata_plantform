@@ -30,11 +30,11 @@ def check_datax_installation():
     datax_home = os.environ.get('DATAX_HOME', '/opt/datax')
     datax_script = os.path.join(datax_home, 'bin', 'datax.py')
 
-    logger.info("🔍 Checking DataX installation...")
+    logger.info("Checking DataX installation...")
 
     if not os.path.exists(datax_script):
-        logger.warning(f"⚠️ DataX not found at {datax_script}")
-        logger.info("💡 Please ensure DataX is properly installed in ./datax directory")
+        logger.warning(f"DataX not found at {datax_script}")
+        logger.info("Please ensure DataX is properly installed in ./datax directory")
         return False
 
     # 检查DataX脚本权限
@@ -42,9 +42,9 @@ def check_datax_installation():
         logger.warning(f"⚠️ DataX script not executable: {datax_script}")
         try:
             os.chmod(datax_script, 0o755)
-            logger.info("✅  Fixed DataX script permissions")
+            logger.info("Fixed DataX script permissions")
         except Exception as e:
-            logger.error(f"❌  Failed to fix DataX permissions: {e}")
+            logger.error(f"Failed to fix DataX permissions: {e}")
             return False
 
     # 检查Java环境
@@ -53,15 +53,15 @@ def check_datax_installation():
                                 capture_output=True, text=True, timeout=10)
         if result.returncode == 0:
             java_version = result.stderr.split('\n')[0] if result.stderr else "Unknown"
-            logger.info(f" Java version check passed: {java_version}")
+            logger.info(f"ava version check passed: {java_version}")
         else:
-            logger.error("❌  Java version check failed")
+            logger.error("Java version check failed")
             return False
     except Exception as e:
-        logger.error(f"❌  Java check failed: {e}")
+        logger.error(f"Java check failed: {e}")
         return False
 
-    logger.info("✅  DataX installation check passed")
+    logger.info("DataX installation check passed")
     return True
 def setup_production_logging():
     """Setup cross-platform production logging configuration."""
@@ -94,28 +94,28 @@ def setup_production_logging():
         encoding="utf-8"
     )
 
-    logger.info("✅ Cross-platform production logging configured")
-    logger.info(f"📁 Log file: {log_file}")
+    logger.info("Cross-platform production logging configured")
+    logger.info(f"Log file: {log_file}")
 
 
 def validate_environment():
     """Validate the production environment across platforms."""
 
     logger.info("🔍 Validating production environment...")
-    logger.info(f"🖥️ Platform: {platform.system()} {platform.release()}")
-    logger.info(f"🐍 Python: {sys.version}")
-    logger.info(f"🔧 IS_LOCAL_DEV: {settings.IS_LOCAL_DEV}")
-    logger.info(f"🔧 MOCK_DATA_MODE: {settings.MOCK_DATA_MODE}")
-    logger.info(f"🔧 use_real_clusters: {settings.use_real_clusters}")
+    logger.info(f"Platform: {platform.system()} {platform.release()}")
+    logger.info(f"Python: {sys.version}")
+    logger.info(f"IS_LOCAL_DEV: {settings.IS_LOCAL_DEV}")
+    logger.info(f"MOCK_DATA_MODE: {settings.MOCK_DATA_MODE}")
+    logger.info(f"use_real_clusters: {settings.use_real_clusters}")
 
     # Check if running in Docker
     in_docker = os.path.exists('/.dockerenv') or os.environ.get('DOCKER_CONTAINER') == 'true'
     if in_docker:
-        logger.info("🐳 Running in Docker container")
+        logger.info("Running in Docker container")
 
     # Check required configuration values only if using real clusters
     if settings.use_real_clusters:
-        logger.info("🔍 Validating real cluster configuration...")
+        logger.info("Validating real cluster configuration...")
 
         # Check configuration values from settings (already loaded from .env)
         required_configs = {
@@ -130,26 +130,26 @@ def validate_environment():
             if not config_value:
                 missing_configs.append(config_name)
             else:
-                logger.info(f"✅ {config_name}: {config_value}")
+                logger.info(f"{config_name}: {config_value}")
 
         if missing_configs:
-            logger.error(f"❌ Missing required configuration values: {missing_configs}")
-            logger.info("💡 Make sure your .env file contains all required values")
+            logger.error(f"Missing required configuration values: {missing_configs}")
+            logger.info("Make sure your .env file contains all required values")
             sys.exit(1)
 
         # Validate Hadoop directory exists (if specified and not in Docker)
         if settings.HADOOP_HOME and not in_docker:
             hadoop_home = Path(settings.HADOOP_HOME)
             if not hadoop_home.exists():
-                logger.warning(f"⚠️ HADOOP_HOME directory not found: {hadoop_home}")
-                logger.info("💡 This might be OK if running in a different environment")
+                logger.warning(f"HADOOP_HOME directory not found: {hadoop_home}")
+                logger.info("This might be OK if running in a different environment")
             else:
-                logger.info(f"✅ HADOOP_HOME found: {hadoop_home}")
+                logger.info(f"DOOP_HOME found: {hadoop_home}")
 
         # Validate SSH key for cluster access
         ssh_key_path = settings.get_resolved_ssh_key_path()
         if ssh_key_path and os.path.exists(ssh_key_path):
-            logger.info(f"✅ SSH key found: {ssh_key_path}")
+            logger.info(f"SSH key found: {ssh_key_path}")
 
             # Check permissions on Unix-like systems
             if platform.system() != "Windows":
@@ -157,16 +157,16 @@ def validate_environment():
                 file_stat = os.stat(ssh_key_path)
                 if stat.filemode(file_stat.st_mode) != '-rw-------':
                     logger.warning(f"⚠️ SSH key permissions may be too open: {ssh_key_path}")
-                    logger.info("💡 Consider running: chmod 600 {ssh_key_path}")
+                    logger.info("Consider running: chmod 600 {ssh_key_path}")
         else:
             logger.warning(f"⚠️ SSH key not found: {ssh_key_path}")
-            logger.info("💡 Cluster monitoring may not work without SSH access")
+            logger.info("Cluster monitoring may not work without SSH access")
 
         # Validate nodes configuration
         nodes_config = settings.cluster_nodes_config
         nodes_count = len(nodes_config.get('nodes', []))
         if nodes_count > 0:
-            logger.info(f"✅ Cluster nodes configured: {nodes_count}")
+            logger.info(f"Cluster nodes configured: {nodes_count}")
 
             # Show summary by cluster type
             cluster_summary = {}
@@ -175,13 +175,13 @@ def validate_environment():
                     cluster_summary[cluster_type] = cluster_summary.get(cluster_type, 0) + 1
 
             for cluster_type, count in cluster_summary.items():
-                logger.info(f"   - {cluster_type}: {count} nodes")
+                logger.info(f" - {cluster_type}: {count} nodes")
         else:
-            logger.warning("⚠️ No cluster nodes configured")
-            logger.info("💡 Add node configuration to config/nodes.json")
+            logger.warning("No cluster nodes configured")
+            logger.info("Add node configuration to config/nodes.json")
 
     else:
-        logger.info("ℹ️ Using mock data mode - skipping cluster environment validation")
+        logger.info("Using mock data mode - skipping cluster environment validation")
 
     # Check required directories
     required_dirs = [
@@ -198,29 +198,29 @@ def validate_environment():
 
         try:
             directory.mkdir(parents=True, exist_ok=True)
-            logger.info(f"✅ Directory ready: {directory}")
+            logger.info(f"rectory ready: {directory}")
         except Exception as e:
-            logger.error(f"❌ Cannot create directory {directory}: {e}")
+            logger.error(f"Cannot create directory {directory}: {e}")
             sys.exit(1)
 
-    logger.info("✅ Environment validation passed")
+    logger.info("Environment validation passed")
 
 
 async def test_dependencies():
     """Test critical dependencies and connections."""
 
-    logger.info("🔍 Testing critical dependencies...")
+    logger.info("Testing critical dependencies...")
 
     # Test database connection
     try:
-        from app.utils.database import get_db
+        from app.utils.database import get_async_db
 
         # Test database connection
-        db = next(get_db())
+        db = next(get_async_db())
         db.close()
-        logger.info("✅ Database connection test passed")
+        logger.info("Database connection test passed")
     except Exception as e:
-        logger.warning(f"⚠️ Database connection test failed: {e}")
+        logger.warning(f"Database connection test failed: {e}")
 
     # Test Redis connection if configured
     if not settings.IS_LOCAL_DEV:
@@ -229,15 +229,15 @@ async def test_dependencies():
             await cache_service.initialize()
 
             if await cache_service.health_check():
-                logger.info("✅ Redis connection test passed")
+                logger.info("Redis connection test passed")
             else:
-                logger.warning("⚠️ Redis connection test failed")
+                logger.warning("Redis connection test failed")
         except Exception as e:
-            logger.warning(f"⚠️ Redis connection test failed: {e}")
+            logger.warning(f"Redis connection test failed: {e}")
 
     # Test cluster connections only if enabled
     if settings.use_real_clusters:
-        logger.info("🔍 Testing cluster connections...")
+        logger.info("Testing cluster connections...")
 
         try:
             from app.utils.hadoop_client import HDFSClient, HiveClient
@@ -248,22 +248,22 @@ async def test_dependencies():
                 hdfs_client = HDFSClient()
                 storage_info = hdfs_client.get_storage_info()
                 if storage_info.get('total_size', 0) > 0:
-                    logger.info("✅ HDFS connection test passed")
+                    logger.info("HDFS connection test passed")
                 else:
-                    logger.warning("⚠️ HDFS connection test failed - no storage info")
+                    logger.warning("HDFS connection test failed - no storage info")
             except Exception as e:
-                logger.warning(f"⚠️ HDFS connection test failed: {e}")
+                logger.warning(f"HDFS connection test failed: {e}")
 
             # Test Hive
             try:
                 hive_client = HiveClient()
                 databases = hive_client.get_databases()
                 if databases:
-                    logger.info(f"✅ Hive connection test passed ({len(databases)} databases)")
+                    logger.info(f"Hive connection test passed ({len(databases)} databases)")
                 else:
-                    logger.warning("⚠️ Hive connection test failed - no databases returned")
+                    logger.warning("Hive connection test failed - no databases returned")
             except Exception as e:
-                logger.warning(f"⚠️ Hive connection test failed: {e}")
+                logger.warning(f"Hive connection test failed: {e}")
 
             # Test metrics collector
             try:
@@ -271,21 +271,21 @@ async def test_dependencies():
                 if cluster_metrics:
                     active_nodes = cluster_metrics.get('active_nodes', 0)
                     total_nodes = cluster_metrics.get('total_nodes', 0)
-                    logger.info(f"✅ Metrics collector test passed ({active_nodes}/{total_nodes} nodes)")
+                    logger.info(f"Metrics collector test passed ({active_nodes}/{total_nodes} nodes)")
                 else:
-                    logger.warning("⚠️ Metrics collector test failed - no metrics returned")
+                    logger.warning("Metrics collector test failed - no metrics returned")
             except Exception as e:
-                logger.warning(f"⚠️ Metrics collector test failed: {e}")
+                logger.warning(f"Metrics collector test failed: {e}")
 
         except ImportError as e:
-            logger.warning(f"⚠️ Cluster modules not available: {e}")
+            logger.warning(f"Cluster modules not available: {e}")
         except Exception as e:
-            logger.warning(f"⚠️ Cluster connection tests failed: {e}")
+            logger.warning(f"Cluster connection tests failed: {e}")
 
     else:
-        logger.info("ℹ️ Mock data mode - skipping cluster connection tests")
+        logger.info("Mock data mode - skipping cluster connection tests")
 
-    logger.info("✅ Dependency testing completed")
+    logger.info("Dependency testing completed")
 
 
 def print_startup_banner():
@@ -324,9 +324,9 @@ def print_startup_banner():
 def check_python_version():
     """Check if Python version is compatible."""
     if sys.version_info < (3, 8):
-        logger.error("❌ Python 3.8 or higher is required")
+        logger.error("Python 3.8 or higher is required")
         sys.exit(1)
-    logger.info(f"✅ Python version check passed: {sys.version}")
+    logger.info(f"Python version check passed: {sys.version}")
 
 
 async def initialize_cache():
@@ -335,9 +335,9 @@ async def initialize_cache():
         try:
             from app.utils.cache_service import cache_service
             await cache_service.initialize()
-            logger.info("✅ Cache service initialized")
+            logger.info("Cache service initialized")
         except Exception as e:
-            logger.warning(f"⚠️ Cache service initialization failed: {e}")
+            logger.warning(f"Cache service initialization failed: {e}")
 
 
 async def main():
@@ -360,8 +360,8 @@ async def main():
     # Test dependencies
     await test_dependencies()
 
-    logger.info("🎉 Startup validation completed successfully!")
-    logger.info(f"🚀 Starting server on {settings.HOST}:{settings.PORT}")
+    logger.info("Startup validation completed successfully!")
+    logger.info(f"Starting server on {settings.HOST}:{settings.PORT}")
 
     # Import and run the server
     import uvicorn
@@ -376,7 +376,7 @@ async def main():
         cpu_count = multiprocessing.cpu_count()
         workers = min(4, max(1, cpu_count))
 
-    logger.info(f"🔧 Using {workers} worker{'s' if workers > 1 else ''}")
+    logger.info(f"Using {workers} worker{'s' if workers > 1 else ''}")
 
     # Production server configuration
     config = uvicorn.Config(
@@ -396,9 +396,9 @@ async def main():
     try:
         await server.serve()
     except KeyboardInterrupt:
-        logger.info("👋 Server shutdown by user")
+        logger.info("Server shutdown by user")
     except Exception as e:
-        logger.error(f"❌ Server error: {e}")
+        logger.error(f"Server error: {e}")
         raise
 
 
@@ -410,7 +410,7 @@ if __name__ == "__main__":
 
         asyncio.run(main())
     except KeyboardInterrupt:
-        logger.info("👋 Server shutdown by user")
+        logger.info("Server shutdown by user")
     except Exception as e:
-        logger.error(f"❌ Server startup failed: {e}")
+        logger.error(f"Server startup failed: {e}")
         sys.exit(1)

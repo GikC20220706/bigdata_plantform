@@ -21,9 +21,11 @@ from app.schemas.business_system import (
     SystemStatus,
     BatchOperationResult
 )
-from app.utils.database import get_db
+from app.utils.database import get_async_db
 from app.utils.cache_service import cache_service
 from config.settings import settings
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import select, and_, or_, func, desc, asc
 
 
 class BusinessSystemService:
@@ -37,15 +39,16 @@ class BusinessSystemService:
 
     async def create_business_system(
             self,
-            db: Session,
+            db: AsyncSession,
             system_data: BusinessSystemCreate
     ) -> BusinessSystem:
         """创建业务系统"""
         try:
             # 检查系统名称是否已存在
-            existing = db.query(BusinessSystem).filter(
-                BusinessSystem.system_name == system_data.system_name
-            ).first()
+            result = await db.execute(
+                select(BusinessSystem).where(BusinessSystem.system_name == system_data.system_name)
+            )
+            existing = result.scalar_one_or_none()
 
             if existing:
                 raise ValueError(f"业务系统名称 '{system_data.system_name}' 已存在")
@@ -71,8 +74,8 @@ class BusinessSystemService:
             )
 
             db.add(db_system)
-            db.commit()
-            db.refresh(db_system)
+            await db.commit()
+            await db.refresh(db_system)
 
             # 清除相关缓存
             await self._invalidate_cache_patterns([
@@ -91,7 +94,7 @@ class BusinessSystemService:
 
     async def get_business_system_by_id(
             self,
-            db: Session,
+            db: AsyncSession,
             system_id: int
     ) -> Optional[BusinessSystem]:
         """根据ID获取业务系统"""
@@ -113,7 +116,7 @@ class BusinessSystemService:
 
     async def get_business_system_by_name(
             self,
-            db: Session,
+            db: AsyncSession,
             system_name: str
     ) -> Optional[BusinessSystem]:
         """根据名称获取业务系统"""
@@ -123,9 +126,8 @@ class BusinessSystemService:
         if cached_data:
             return self._deserialize_business_system(cached_data)
 
-        system = db.query(BusinessSystem).filter(
-            BusinessSystem.system_name == system_name
-        ).first()
+        result = await db.execute(select(BusinessSystem).where(BusinessSystem.system_name == system_name))
+        system = result.scalar_one_or_none()
 
         if system:
             await cache_service.set(cache_key, self._serialize_business_system(system), self.cache_ttl)
@@ -134,13 +136,14 @@ class BusinessSystemService:
 
     async def update_business_system(
             self,
-            db: Session,
+            db: AsyncSession,
             system_id: int,
             update_data: BusinessSystemUpdate
     ) -> Optional[BusinessSystem]:
         """更新业务系统"""
         try:
-            system = db.query(BusinessSystem).filter(BusinessSystem.id == system_id).first()
+            result = await db.execute(select(BusinessSystem).where(BusinessSystem.id == system_id))
+            system = result.scalar_one_or_none()
             if not system:
                 return None
 
@@ -161,12 +164,12 @@ class BusinessSystemService:
             db.refresh(system)
 
             # 清除相关缓存
-            await self._invalidate_cache_patterns([
-                f"{self.cache_prefix}:detail:{system_id}",
-                f"{self.cache_prefix}:name:{system.system_name}",
-                f"{self.cache_prefix}:list:*",
-                f"{self.cache_prefix}:statistics"
-            ])
+            # await self._invalidate_cache_patterns([
+            #     f"{self.cache_prefix}:detail:{system_id}",
+            #     f"{self.cache_prefix}:name:{system.system_name}",
+            #     f"{self.cache_prefix}:list:*",
+            #     f"{self.cache_prefix}:statistics"
+            # ])
 
             logger.info(f"更新业务系统成功: {system.system_name}")
             return system
@@ -176,10 +179,11 @@ class BusinessSystemService:
             logger.error(f"更新业务系统失败: {e}")
             raise
 
-    async def delete_business_system(self, db: Session, system_id: int) -> bool:
+    async def delete_business_system(self, db: AsyncSession, system_id: int) -> bool:
         """删除业务系统（软删除）"""
         try:
-            system = db.query(BusinessSystem).filter(BusinessSystem.id == system_id).first()
+            result = await db.execute(select(BusinessSystem).where(BusinessSystem.id == system_id))
+            system = result.scalar_one_or_none()
             if not system:
                 return False
 
@@ -208,7 +212,7 @@ class BusinessSystemService:
 
     async def get_business_systems_list(
             self,
-            db: Session,
+            db: AsyncSession,
             search_params: BusinessSystemSearchParams
     ) -> Tuple[List[BusinessSystem], int]:
         """获取业务系统列表（支持搜索和分页）"""
@@ -220,26 +224,35 @@ class BusinessSystemService:
             return self._deserialize_list_result(cached_data)
 
         # 构建查询
-        query = db.query(BusinessSystem)
+        base_query = select(BusinessSystem)
 
         # 应用搜索条件
-        query = self._apply_search_filters(query, search_params)
+        filtered_query = self._apply_search_filters_async(base_query, search_params)
 
         # 获取总数
-        total = query.count()
+        count_result = await db.execute(select(func.count()).select_from(filtered_query.subquery()))
+        total = count_result.scalar()
 
         # 应用排序
-        query = self._apply_sorting(query, search_params)
+        final_query = self._apply_sorting_async(filtered_query, search_params)
 
         # 应用分页
         offset = (search_params.page - 1) * search_params.page_size
-        systems = query.offset(offset).limit(search_params.page_size).all()
+        final_query = final_query.offset(offset).limit(search_params.page_size)
+
+        # 执行查询
+        query_result = await db.execute(final_query)
+        systems = query_result.scalars().all()
+
+        # 将 systems 转换为列表（如果不是的话）
+        systems_list = list(systems) if systems else []
 
         # 缓存结果
-        result = (systems, total)
-        await cache_service.set(cache_key, self._serialize_list_result(result), self.cache_ttl)
+        cache_result = (systems_list, total)
+        await cache_service.set(cache_key, self._serialize_list_result(cache_result), self.cache_ttl)
 
-        return result
+        # 返回结果
+        return cache_result
 
     def _apply_search_filters(self, query, search_params: BusinessSystemSearchParams):
         """应用搜索过滤条件"""
@@ -291,7 +304,7 @@ class BusinessSystemService:
 
     # === 统计和监控 ===
 
-    async def get_business_systems_statistics(self, db: Session) -> BusinessSystemStatistics:
+    async def get_business_systems_statistics(self, db: AsyncSession) -> BusinessSystemStatistics:
         """获取业务系统统计信息"""
         cache_key = f"{self.cache_prefix}:statistics"
 
@@ -360,7 +373,7 @@ class BusinessSystemService:
 
         return statistics
 
-    async def get_business_systems_count(self, db: Session) -> int:
+    async def get_business_systems_count(self, db: AsyncSession) -> int:
         """获取活跃业务系统数量（用于总览页面）"""
         cache_key = f"{self.cache_prefix}:count"
 
@@ -381,7 +394,7 @@ class BusinessSystemService:
 
     async def get_business_system_health(
             self,
-            db: Session,
+            db: AsyncSession,
             system_id: int
     ) -> Optional[BusinessSystemHealth]:
         """获取业务系统健康状态"""
@@ -432,14 +445,15 @@ class BusinessSystemService:
 
     async def update_system_status(
             self,
-            db: Session,
+            db: AsyncSession,
             system_id: int,
             new_status: SystemStatus,
             reason: Optional[str] = None
     ) -> Optional[BusinessSystem]:
         """更新业务系统状态"""
         try:
-            system = db.query(BusinessSystem).filter(BusinessSystem.id == system_id).first()
+            result = await db.execute(select(BusinessSystem).where(BusinessSystem.id == system_id))
+            system = result.scalar_one_or_none()
             if not system:
                 return None
 
@@ -485,7 +499,7 @@ class BusinessSystemService:
 
     async def add_data_source_association(
             self,
-            db: Session,
+            db: AsyncSession,
             system_id: int,
             association_data: DataSourceAssociationCreate
     ) -> BusinessSystemDataSource:
@@ -535,7 +549,7 @@ class BusinessSystemService:
 
     async def batch_import_systems(
             self,
-            db: Session,
+            db: AsyncSession,
             systems_data: List[BusinessSystemCreate],
             overwrite_existing: bool = False
     ) -> BatchOperationResult:
@@ -690,6 +704,49 @@ class BusinessSystemService:
             return "pending"
         else:
             return "overdue"
+
+    def _apply_search_filters_async(self, query, search_params: BusinessSystemSearchParams):
+        """应用搜索过滤条件 - 异步版本"""
+        # 关键词搜索
+        if search_params.keyword:
+            keyword = f"%{search_params.keyword}%"
+            query = query.where(
+                or_(
+                    BusinessSystem.system_name.ilike(keyword),
+                    BusinessSystem.display_name.ilike(keyword),
+                    BusinessSystem.description.ilike(keyword),
+                    BusinessSystem.business_domain.ilike(keyword)
+                )
+            )
+
+        # 状态过滤
+        if search_params.status:
+            query = query.where(BusinessSystem.status == search_params.status.value)
+
+        # 系统类型过滤
+        if search_params.system_type:
+            query = query.where(BusinessSystem.system_type == search_params.system_type.value)
+
+        # 业务领域过滤
+        if search_params.business_domain:
+            query = query.where(BusinessSystem.business_domain == search_params.business_domain)
+
+        # 重要程度过滤
+        if search_params.criticality_level:
+            query = query.where(BusinessSystem.criticality_level == search_params.criticality_level.value)
+
+        return query
+
+    def _apply_sorting_async(self, query, search_params: BusinessSystemSearchParams):
+        """应用排序 - 异步版本"""
+        order_field = getattr(BusinessSystem, search_params.order_by, BusinessSystem.created_at)
+
+        if search_params.order_desc:
+            query = query.order_by(desc(order_field))
+        else:
+            query = query.order_by(asc(order_field))
+
+        return query
 
 
 # 全局业务系统服务实例

@@ -12,7 +12,7 @@ from sqlalchemy.orm import sessionmaker, Session
 from sqlalchemy.pool import QueuePool
 from config.settings import settings
 from sqlalchemy import create_engine, text
-
+from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker, AsyncSession
 
 # 根据数据库类型配置连接参数
 def get_engine_config():
@@ -64,29 +64,52 @@ def get_sync_db_session():
 
 # 创建数据库引擎
 engine_config = get_engine_config()
-engine = create_engine(settings.DATABASE_URL, **engine_config)
-
-SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+#engine = create_engine(settings.DATABASE_URL, **engine_config)
+async_engine = create_async_engine(
+    settings.DATABASE_URL,  # 确保URL包含 +aiomysql
+    pool_size=20,
+    max_overflow=40,
+    pool_timeout=60,
+    pool_recycle=3600,
+    pool_pre_ping=True,
+    echo=False
+)
+async_session_maker = async_sessionmaker(
+    bind=async_engine,  # 使用现有的异步引擎
+    class_=AsyncSession,
+    expire_on_commit=False
+)
+#SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 Base = declarative_base()
 
 
-def get_db() -> Generator[Session, None, None]:
-    """
-    Get database session.
+# def get_db() -> Generator[Session, None, None]:
+#     """
+#     Get database session.
+#
+#     Yields:
+#         Session: Database session
+#     """
+#     db = SessionLocal()
+#     try:
+#         yield db
+#         db.commit()
+#     except Exception:
+#         db.rollback()
+#         raise
+#     finally:
+#         db.close()
 
-    Yields:
-        Session: Database session
-    """
-    db = SessionLocal()
-    try:
-        yield db
-        db.commit()
-    except Exception:
-        db.rollback()
-        raise
-    finally:
-        db.close()
-
+async def get_async_db() -> AsyncSession:
+    """异步数据库会话依赖"""
+    async with async_session_maker() as session:
+        try:
+            yield session
+        except Exception:
+            await session.rollback()
+            raise
+        finally:
+            await session.close()
 
 def create_tables_sync():
     """Create all database tables - 完全同步版本"""
@@ -213,7 +236,7 @@ def create_mysql_indexes_sync(engine):
 
 def drop_tables():
     """Drop all database tables."""
-    Base.metadata.drop_all(bind=engine)
+    Base.metadata.drop_all(bind=async_engine)
 
 
 def test_connection():
