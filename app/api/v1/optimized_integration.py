@@ -2,7 +2,7 @@ from fastapi import APIRouter, HTTPException, Query, Body, BackgroundTasks, Uplo
 from typing import List, Optional, Dict, Any
 from datetime import datetime
 from app.utils.response import create_response
-from app.services.optimized_data_integration_service import optimized_data_integration_service
+from app.services.optimized_data_integration_service import get_optimized_data_integration_service
 from app.utils.integration_cache import integration_cache
 from loguru import logger
 
@@ -12,7 +12,8 @@ router = APIRouter()
 @router.get("/", summary="获取数据集成概览")
 async def get_integration_overview():
     try:
-        overview = await optimized_data_integration_service.get_data_sources_overview()
+        service = get_optimized_data_integration_service()
+        overview = await service.get_data_sources_overview()
         return create_response(data=overview, message="获取数据集成概览成功")
     except Exception as e:
         logger.error(f"获取数据集成概览失败: {e}")
@@ -22,7 +23,8 @@ async def get_integration_overview():
 @router.get("/sources", summary="获取数据源列表")
 async def get_data_sources():
     try:
-        sources = await optimized_data_integration_service.get_data_sources_list()
+        service = get_optimized_data_integration_service()
+        sources = await service.get_data_sources_list()
         return create_response(
             data={
                 "sources": sources,
@@ -51,7 +53,8 @@ async def create_data_source(request: dict):
             raise HTTPException(status_code=400, detail="缺少必要字段: name, type, config")
 
         logger.info(f"开始创建数据源: {name}")
-        result = await optimized_data_integration_service.add_data_source(
+        service = get_optimized_data_integration_service()
+        result = await service.add_data_source(
             name=name,
             db_type=db_type,
             config=config,
@@ -76,7 +79,8 @@ async def create_data_source(request: dict):
 @router.delete("/sources/{source_name}", summary="删除数据源")
 async def delete_data_source(source_name: str):
     try:
-        result = await optimized_data_integration_service.remove_data_source(source_name)
+        service = get_optimized_data_integration_service()
+        result = await service.remove_data_source(source_name)
         if result.get('success'):
             return create_response(data=result, message=f"数据源 {source_name} 删除成功")
         else:
@@ -88,7 +92,8 @@ async def delete_data_source(source_name: str):
 @router.post("/sources/{source_name}/test", summary="测试数据源连接")
 async def test_data_source(source_name: str):
     try:
-        result = await optimized_data_integration_service.test_data_source(source_name)
+        service = get_optimized_data_integration_service()
+        result = await service.test_data_source(source_name)
         return create_response(data=result, message="连接测试完成")
     except Exception as e:
         logger.error(f"测试数据源连接失败: {e}")
@@ -99,7 +104,8 @@ async def batch_test_connections(source_names: List[str] = Body(..., description
     try:
         if len(source_names) > 50:
             raise HTTPException(status_code=400, detail="批量测试数量不能超过50个")
-        summary = await optimized_data_integration_service.batch_test_connections(source_names)
+        service = get_optimized_data_integration_service()
+        summary = await service.batch_test_connections(source_names)
         return create_response(data=summary, message=f"批量连接测试完成，成功 {summary['successful']}/{summary['total_tested']}")
     except Exception as e:
         logger.error(f"批量测试连接失败: {e}")
@@ -109,7 +115,8 @@ async def batch_test_connections(source_names: List[str] = Body(..., description
 @router.get("/sources/{source_name}/databases", summary="获取数据库列表")
 async def get_databases(source_name: str):
     try:
-        result = await optimized_data_integration_service.get_databases(source_name)
+        service = get_optimized_data_integration_service()
+        result = await service.get_databases(source_name)
         if result.get('success'):
             return create_response(data=result, message=f"获取 {source_name} 数据库列表成功")
         else:
@@ -127,7 +134,8 @@ async def get_tables(
     offset: int = Query(0, ge=0, description="偏移量")
 ):
     try:
-        result = await optimized_data_integration_service.get_tables(
+        service = get_optimized_data_integration_service()
+        result = await service.get_tables(
             source_name, database, schema, limit, offset
         )
         if result.get('success'):
@@ -140,7 +148,8 @@ async def get_tables(
 @router.get("/sources/{source_name}/tables/{table_name}/schema", summary="获取表结构")
 async def get_table_schema(source_name: str, table_name: str, database: Optional[str] = Query(None, description="数据库名称"),schema: Optional[str] = Query(None, description="Schema名称")):
     try:
-        result = await optimized_data_integration_service.get_table_schema(source_name, table_name, database,schema)
+        service = get_optimized_data_integration_service()
+        result = await service.get_table_schema(source_name, table_name, database,schema)
         if result.get('success'):
             return create_response(data=result, message=f"获取表 {table_name} 结构成功")
         else:
@@ -153,7 +162,8 @@ async def get_table_schema(source_name: str, table_name: str, database: Optional
 async def get_table_metadata(source_name: str, table_name: str, database: Optional[str] = Query(None, description="数据库名称"),
     schema: Optional[str] = Query(None, description="Schema名称")):
     try:
-        result = await optimized_data_integration_service.get_table_metadata(source_name, table_name, database,schema)
+        service = get_optimized_data_integration_service()
+        result = await service.get_table_metadata(source_name, table_name, database,schema)
         if result.get('success'):
             return create_response(data=result, message=f"获取表 {table_name} 元数据成功")
         else:
@@ -165,7 +175,8 @@ async def get_table_metadata(source_name: str, table_name: str, database: Option
 @router.get("/tables/search", summary="搜索表")
 async def search_tables(keyword: Optional[str] = Query(None), source_name: Optional[str] = Query(None), table_type: Optional[str] = Query(None)):
     try:
-        result = await optimized_data_integration_service.search_tables(keyword=keyword, source_name=source_name, table_type=table_type)
+        service = get_optimized_data_integration_service()
+        result = await service.search_tables(keyword=keyword, source_name=source_name, table_type=table_type)
         if result.get('success'):
             return create_response(data=result, message="表搜索成功")
         else:
@@ -184,7 +195,8 @@ async def execute_query(source_name: str, request: dict):
         limit = request.get('limit', 100)
         if not query:
             raise HTTPException(status_code=400, detail="查询语句不能为空")
-        result = await optimized_data_integration_service.execute_query(source_name=source_name, query=query, database=database, schema=schema, limit=limit)
+        service = get_optimized_data_integration_service()
+        result = await service.execute_query(source_name=source_name, query=query, database=database, schema=schema, limit=limit)
         if result.get('success'):
             return create_response(data=result, message="查询执行成功")
         else:
@@ -196,7 +208,8 @@ async def execute_query(source_name: str, request: dict):
 @router.get("/sources/{source_name}/preview", summary="预览数据源数据")
 async def preview_data_source(source_name: str, table_name: Optional[str] = Query(None), database: Optional[str] = Query(None), limit: int = Query(10, ge=1, le=100)):
     try:
-        result = await optimized_data_integration_service.preview_data_source(source_name=source_name, table_name=table_name, database=database, limit=limit)
+        service = get_optimized_data_integration_service()
+        result = await service.preview_data_source(source_name=source_name, table_name=table_name, database=database, limit=limit)
         if result.get('success'):
             return create_response(data=result, message="数据预览成功")
         else:
@@ -209,7 +222,8 @@ async def preview_data_source(source_name: str, table_name: Optional[str] = Quer
 @router.get("/health", summary="获取数据集成模块健康状态")
 async def get_integration_health():
     try:
-        health_data = await optimized_data_integration_service.get_health_status()
+        service = get_optimized_data_integration_service()
+        health_data = await service.get_health_status()
         return create_response(data=health_data, message="获取数据集成模块健康状态成功")
     except Exception as e:
         logger.error(f"获取健康状态失败: {e}")
@@ -255,7 +269,8 @@ async def clear_cache(pattern: Optional[str] = Query(None, description="清除�
 @router.post("/sources/excel/upload", summary="上传Excel文件创建数据源")
 async def upload_excel_source(name: str = Form(...), file: UploadFile = File(...), description: Optional[str] = Form(None)):
     try:
-        result = await optimized_data_integration_service.upload_excel_source(name, file, description)
+        service = get_optimized_data_integration_service()
+        result = await service.upload_excel_source(name, file, description)
         if result.get('success'):
             return create_response(data=result, message=f"Excel数据源 {name} 创建成功")
         else:
@@ -267,7 +282,8 @@ async def upload_excel_source(name: str = Form(...), file: UploadFile = File(...
 @router.get("/sources/excel/files", summary="获取已上传的Excel文件列表")
 async def list_excel_files():
     try:
-        files = await optimized_data_integration_service.list_excel_files()
+        service = get_optimized_data_integration_service()
+        files = await service.list_excel_files()
         return create_response(data={"files": files, "total_count": len(files)}, message="获取Excel文件列表成功")
     except Exception as e:
         logger.error(f"获取Excel文件列表失败: {e}")
@@ -276,7 +292,8 @@ async def list_excel_files():
 @router.get("/sources/{source_name}/sheets", summary="获取Excel工作表列表")
 async def get_excel_sheets(source_name: str):
     try:
-        result = await optimized_data_integration_service.get_excel_sheets(source_name)
+        service = get_optimized_data_integration_service()
+        result = await service.get_excel_sheets(source_name)
         if result.get('success'):
             return create_response(data=result, message="获取Excel工作表列表成功")
         else:
@@ -288,7 +305,8 @@ async def get_excel_sheets(source_name: str):
 @router.get("/sources/{source_name}/sheets/{sheet_name}/preview", summary="预览Excel工作表数据")
 async def preview_excel_sheet(source_name: str, sheet_name: str, limit: int = Query(10, ge=1, le=100)):
     try:
-        result = await optimized_data_integration_service.preview_excel_sheet(source_name, sheet_name, limit)
+        service = get_optimized_data_integration_service()
+        result = await service.preview_excel_sheet(source_name, sheet_name, limit)
         if result.get('success'):
             return create_response(data=result, message="预览Excel工作表数据成功")
         else:
@@ -300,11 +318,33 @@ async def preview_excel_sheet(source_name: str, sheet_name: str, limit: int = Qu
 @router.delete("/sources/{source_name}/excel", summary="删除Excel数据源和文件")
 async def delete_excel_source(source_name: str):
     try:
-        result = await optimized_data_integration_service.delete_excel_source(source_name)
+        service = get_optimized_data_integration_service()
+        result = await service.delete_excel_source(source_name)
         if result.get('success'):
             return create_response(data=result, message="Excel数据源及文件删除成功")
         else:
             raise HTTPException(status_code=400, detail=result.get('error', '删除Excel数据源失败'))
     except Exception as e:
         logger.error(f"删除Excel数据源失败: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/sources/{source_name}/tables/refresh", summary="刷新数据源表信息")
+async def refresh_source_tables(
+        source_name: str,
+        database: Optional[str] = Query(None, description="数据库名称"),
+        schema: Optional[str] = Query(None, description="Schema名称")
+):
+    """手动刷新数据源的表信息到本地数据库"""
+    try:
+        service = get_optimized_data_integration_service()
+        result = await service._refresh_tables_to_db(source_name, database, schema)
+
+        if result.get('success'):
+            return create_response(data=result, message=f"数据源 {source_name} 表信息刷新成功")
+        else:
+            raise HTTPException(status_code=400, detail=result.get('error', '刷新失败'))
+
+    except Exception as e:
+        logger.error(f"刷新表信息失败: {e}")
         raise HTTPException(status_code=500, detail=str(e))

@@ -751,9 +751,9 @@ class OptimizedDataIntegrationService:
                 if existing:
                     # 更新现有记录
                     db.execute(text("""
-                        UPDATE data_sources 
+                        UPDATE data_sources
                         SET source_type = :db_type, connection_config = :config, status = :status, 
-                            last_connection_test = NOW(), description = :description
+                            last_connection_test = NOW(), description = :description, is_active = TRUE
                         WHERE name = :name
                     """), {
                         "db_type": db_type,
@@ -847,33 +847,46 @@ class OptimizedDataIntegrationService:
     async def remove_data_source(self, name: str) -> Dict[str, Any]:
         """删除数据源"""
         try:
-            # 从连接管理器中移除
-            removed = self.connection_manager.remove_client(name)
+            logger.info(f"开始删除数据源: {name}")
 
-            if removed:
-                # 从数据库中软删除
-                try:
-                    await self._remove_from_db(name)
-                except Exception as db_error:
-                    logger.error(f"从数据库删除失败: {db_error}")
+            # 检查数据源是否存在
+            client_exists = self.connection_manager.get_client(name) is not None
+            logger.info(f"数据源是否存在: {client_exists}")
 
-                return {
-                    "success": True,
-                    "message": f"数据源 {name} 删除成功"
-                }
-            else:
+            if not client_exists:
                 return {
                     "success": False,
                     "error": f"数据源 {name} 不存在"
                 }
 
-        except Exception as e:
-            logger.error(f"删除数据源失败: {e}")
+            # 从连接管理器中移除
+            logger.info(f"步骤1: 从连接管理器移除 {name}")
+            self.connection_manager.remove_client(name)
+            logger.info(f"连接管理器移除完成: {name}")
+
+            # 从数据库中软删除
+            try:
+                logger.info(f"步骤2: 开始数据库软删除 {name}")
+                await self._remove_from_db(name)
+                logger.info(f"数据库软删除成功: {name}")
+            except Exception as db_error:
+                logger.error(f"数据库删除失败 {name}: {db_error}")
+                # 即使数据库删除失败，连接已移除，仍然认为删除成功
+
+            logger.info(f"步骤3: 删除操作完成 {name}")
             return {
-                "success": False,
-                "error": str(e)
+                "success": True,
+                "message": f"数据源 {name} 删除成功"
             }
 
+        except Exception as e:
+            logger.error(f"删除数据源异常 {name}: {e}")
+            import traceback
+            logger.error(f"删除异常堆栈: {traceback.format_exc()}")
+            return {
+                "success": False,
+                "error": str(e) if str(e) else "删除过程中发生未知错误"
+            }
     async def _remove_data_source_from_db(self, name: str) -> bool:
         """从数据库删除数据源（软删除）"""
         try:
@@ -901,26 +914,43 @@ class OptimizedDataIntegrationService:
             return False
 
     async def _remove_from_db(self, name: str):
-        """从数据库中移除数据源"""
+        """从数据库中移除数据源 - 调试版本"""
         try:
-            from app.utils.database import get_sync_db_session
+            logger.info(f"_remove_from_db: 开始处理 {name}")
 
+            from app.utils.database import get_sync_db_session
+            from sqlalchemy import text
+
+            logger.info(f"_remove_from_db: 获取数据库会话")
             db = get_sync_db_session()
+
             try:
-                # 软删除
-                db.execute(text("""
+                logger.info(f"_remove_from_db: 执行SQL更新 {name}")
+                # 软删除 - 使用正确的SQLAlchemy占位符格式
+                result = db.execute(text("""
                     UPDATE data_sources 
                     SET is_active = FALSE, status = 'deleted'
-                    WHERE name = %s
-                """), (name,))
+                    WHERE name = :name
+                """), {"name": name})
+
+                logger.info(f"_remove_from_db: SQL执行结果 rowcount={result.rowcount}")
                 db.commit()
-                logger.info(f"数据源 {name} 已从数据库软删除")
+                logger.info(f"_remove_from_db: 数据库提交成功 {name}")
+
+            except Exception as db_error:
+                logger.error(f"_remove_from_db: 数据库操作失败 {name}: {db_error}")
+                import traceback
+                logger.error(f"_remove_from_db: 数据库异常堆栈: {traceback.format_exc()}")
+                db.rollback()
+                raise
             finally:
+                logger.info(f"_remove_from_db: 关闭数据库连接")
                 db.close()
 
         except Exception as e:
-            logger.error(f"从数据库删除数据源失败: {e}")
-
+            logger.error(f"_remove_from_db: 整体异常 {name}: {e}")
+            import traceback
+            logger.error(f"_remove_from_db: 整体异常堆栈: {traceback.format_exc()}")
     async def get_table_metadata(self, source_name: str, table_name: str, database: str = None, schema: str = None) -> Dict[str, Any]:
         """获取表的完整元数据 - 缓存优化"""
         cache_key = f"metadata_{source_name}_{database or 'default'}_{table_name}"
@@ -1375,8 +1405,13 @@ class OptimizedDataIntegrationService:
         }
 
 
-# 全局优化服务实例
-optimized_data_integration_service = OptimizedDataIntegrationService()
-cache_connection_status(ttl=60)
+_service_instance = None
+
+def get_optimized_data_integration_service():
+    """获取数据集成服务实例"""
+    global _service_instance
+    if _service_instance is None:
+        _service_instance = OptimizedDataIntegrationService()
+    return _service_instance
 
 

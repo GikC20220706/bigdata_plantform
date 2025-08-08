@@ -12,7 +12,7 @@ from pathlib import Path
 from loguru import logger
 
 from app.services.datax_service import EnhancedSyncService
-from app.services.optimized_data_integration_service import optimized_data_integration_service
+from app.services.optimized_data_integration_service import get_optimized_data_integration_service
 from app.utils.response import create_response
 
 
@@ -21,7 +21,7 @@ class SmartSyncService:
 
     def __init__(self):
         self.datax_service = EnhancedSyncService()
-        self.integration_service = optimized_data_integration_service
+        self.integration_service = get_optimized_data_integration_service()
 
     async def analyze_sync_plan(self, sync_request: Dict[str, Any]) -> Dict[str, Any]:
         """分析同步计划，自动生成同步策略"""

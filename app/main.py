@@ -78,7 +78,7 @@ async def lifespan(app: FastAPI):
 
         # 初始化优化的数据集成服务
     try:
-        from app.services.optimized_data_integration_service import optimized_data_integration_service
+        from app.services.optimized_data_integration_service import get_optimized_data_integration_service
         logger.info("Optimized data integration service initialized")
 
         # 预热关键缓存（后台执行）
@@ -144,10 +144,11 @@ async def warm_critical_cache():
     try:
         await asyncio.sleep(5)  # 等待服务完全启动
 
-        from app.services.optimized_data_integration_service import optimized_data_integration_service
+        from app.services.optimized_data_integration_service import get_optimized_data_integration_service
 
         # 预热概览数据
-        await optimized_data_integration_service.get_data_sources_overview()
+        service = get_optimized_data_integration_service()
+        await service.get_data_sources_overview()
         logger.info("✅ Integration overview cache warmed")
 
         # 预热数据源列表
@@ -285,7 +286,7 @@ def setup_static_files(app: FastAPI) -> None:
     static_dir = Path(__file__).parent.parent / "static"
     if static_dir.exists():
         app.mount("/static", StaticFiles(directory=str(static_dir)), name="static")
-        logger.info(f"✅ Static files mounted from {static_dir}")
+        logger.info(f"Static files mounted from {static_dir}")
 
     # Templates
     templates_dir = Path(__file__).parent.parent / "templates"
