@@ -7,7 +7,7 @@ import asyncio
 from datetime import datetime
 from typing import List, Optional
 from fastapi import APIRouter, HTTPException, Query, Depends, BackgroundTasks
-from sqlalchemy import or_
+from sqlalchemy import or_, and_
 #from sqlalchemy.orm import Session
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -325,11 +325,8 @@ async def get_system_data_sources(
         if not system:
             raise HTTPException(status_code=404, detail="业务系统不存在")
 
-        # 查询关联的数据源
-        from app.models.business_system import BusinessSystemDataSource
-        associations = db.query(BusinessSystemDataSource).filter(
-            BusinessSystemDataSource.business_system_id == system_id
-        ).all()
+        # 获取关联的数据源
+        associations = await business_system_service.get_system_data_sources(db, system_id)
 
         return [DataSourceAssociationResponse.from_orm(assoc) for assoc in associations]
 
@@ -366,27 +363,33 @@ async def remove_data_source_association(
         association_id: int,
         db: AsyncSession = Depends(get_async_db)
 ):
-    """删除业务系统的数据源关联"""
     try:
         from app.models.business_system import BusinessSystemDataSource
+        from sqlalchemy import select
 
-        association = db.query(BusinessSystemDataSource).filter(
-            BusinessSystemDataSource.id == association_id,
-            BusinessSystemDataSource.business_system_id == system_id
-        ).first()
+        # 改为异步查询
+        result = await db.execute(
+            select(BusinessSystemDataSource).where(
+                and_(
+                    BusinessSystemDataSource.id == association_id,
+                    BusinessSystemDataSource.business_system_id == system_id
+                )
+            )
+        )
+        association = result.scalar_one_or_none()
 
         if not association:
             raise HTTPException(status_code=404, detail="数据源关联不存在")
 
-        db.delete(association)
-        db.commit()
+        await db.delete(association)
+        await db.commit()  # 加 await
 
         return create_response(message="数据源关联删除成功")
 
     except HTTPException:
         raise
     except Exception as e:
-        db.rollback()
+        await db.rollback()  # 加 await
         logger.error(f"删除数据源关联失败: {e}")
         raise HTTPException(status_code=500, detail="删除数据源关联失败")
 

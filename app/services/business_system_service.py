@@ -76,7 +76,10 @@ class BusinessSystemService:
             db.add(db_system)
             await db.commit()
             await db.refresh(db_system)
-
+            # 添加显式字段加载
+            _ = db_system.created_at
+            _ = db_system.updated_at
+            _ = db_system.id
             # 清除相关缓存
             await self._invalidate_cache_patterns([
                 f"{self.cache_prefix}:list:*",
@@ -88,7 +91,7 @@ class BusinessSystemService:
             return db_system
 
         except Exception as e:
-            db.rollback()
+            await db.rollback()
             logger.error(f"创建业务系统失败: {e}")
             raise
 
@@ -106,9 +109,16 @@ class BusinessSystemService:
             return self._deserialize_business_system(cached_data)
 
         # 从数据库查询
-        system = db.query(BusinessSystem).filter(BusinessSystem.id == system_id).first()
+        result = await db.execute(select(BusinessSystem).where(BusinessSystem.id == system_id))
+        system = result.scalar_one_or_none()
 
         if system:
+            # 添加显式字段加载
+            _ = system.created_at
+            _ = system.updated_at
+            _ = system.id
+            _ = system.go_live_date
+            _ = system.last_data_sync
             # 缓存结果
             await cache_service.set(cache_key, self._serialize_business_system(system), self.cache_ttl)
 
@@ -130,6 +140,12 @@ class BusinessSystemService:
         system = result.scalar_one_or_none()
 
         if system:
+            # 添加显式字段加载
+            _ = system.created_at
+            _ = system.updated_at
+            _ = system.id
+            _ = system.go_live_date
+            _ = system.last_data_sync
             await cache_service.set(cache_key, self._serialize_business_system(system), self.cache_ttl)
 
         return system
@@ -160,8 +176,8 @@ class BusinessSystemService:
                     else:
                         setattr(system, field, value)
 
-            db.commit()
-            db.refresh(system)
+            await db.commit()
+            await db.refresh(system)
 
             # 清除相关缓存
             # await self._invalidate_cache_patterns([
@@ -170,12 +186,16 @@ class BusinessSystemService:
             #     f"{self.cache_prefix}:list:*",
             #     f"{self.cache_prefix}:statistics"
             # ])
+            # 添加显式字段加载
+            _ = system.created_at
+            _ = system.updated_at
+            _ = system.id
 
             logger.info(f"更新业务系统成功: {system.system_name}")
             return system
 
         except Exception as e:
-            db.rollback()
+            await db.rollback()
             logger.error(f"更新业务系统失败: {e}")
             raise
 
@@ -189,7 +209,7 @@ class BusinessSystemService:
 
             # 软删除：设置状态为deprecated
             system.status = SystemStatus.DEPRECATED.value
-            db.commit()
+            await db.commit()
 
             # 清除相关缓存
             await self._invalidate_cache_patterns([
@@ -204,7 +224,7 @@ class BusinessSystemService:
             return True
 
         except Exception as e:
-            db.rollback()
+            await db.rollback()
             logger.error(f"删除业务系统失败: {e}")
             raise
 
@@ -243,6 +263,13 @@ class BusinessSystemService:
         # 执行查询
         query_result = await db.execute(final_query)
         systems = query_result.scalars().all()
+
+        for system in systems:
+            _ = system.created_at
+            _ = system.updated_at
+            _ = system.id
+            _ = system.go_live_date
+            _ = system.last_data_sync
 
         # 将 systems 转换为列表（如果不是的话）
         systems_list = list(systems) if systems else []
@@ -314,47 +341,53 @@ class BusinessSystemService:
             return BusinessSystemStatistics(**cached_data)
 
         # 计算统计信息
-        total_systems = db.query(BusinessSystem).count()
-        active_systems = db.query(BusinessSystem).filter(
-            BusinessSystem.status == SystemStatus.ACTIVE.value
-        ).count()
-        inactive_systems = total_systems - active_systems
+        total_result = await db.execute(select(func.count(BusinessSystem.id)))
+        total_systems = total_result.scalar()
+
+
+        # 活跃系统数
+        active_result = await db.execute(
+            select(func.count(BusinessSystem.id)).where(BusinessSystem.status == SystemStatus.ACTIVE.value)
+        )
+        active_systems = active_result.scalar()
 
         # 按类型分组统计
-        by_type = dict(
-            db.query(BusinessSystem.system_type, func.count(BusinessSystem.id))
+        type_result = await db.execute(
+            select(BusinessSystem.system_type, func.count(BusinessSystem.id))
             .group_by(BusinessSystem.system_type)
-            .all()
         )
+        by_type = dict(type_result.all())
 
         # 按业务领域分组统计
-        by_domain = dict(
-            db.query(BusinessSystem.business_domain, func.count(BusinessSystem.id))
-            .filter(BusinessSystem.business_domain.isnot(None))
+        domain_result = await db.execute(
+            select(BusinessSystem.business_domain, func.count(BusinessSystem.id))
+            .where(BusinessSystem.business_domain.isnot(None))
             .group_by(BusinessSystem.business_domain)
-            .all()
         )
+        by_domain = dict(domain_result.all())
 
         # 按重要程度分组统计
-        by_criticality = dict(
-            db.query(BusinessSystem.criticality_level, func.count(BusinessSystem.id))
+        criticality_result = await db.execute(
+            select(BusinessSystem.criticality_level, func.count(BusinessSystem.id))
             .group_by(BusinessSystem.criticality_level)
-            .all()
         )
+        by_criticality = dict(criticality_result.all())
 
         # 按状态分组统计
-        by_status = dict(
-            db.query(BusinessSystem.status, func.count(BusinessSystem.id))
+        status_result = await db.execute(
+            select(BusinessSystem.status, func.count(BusinessSystem.id))
             .group_by(BusinessSystem.status)
-            .all()
         )
+        by_status = dict(status_result.all())
 
         # 总表数量
-        total_tables = db.query(func.sum(BusinessSystem.table_count)).scalar() or 0
+        tables_result = await db.execute(select(func.sum(BusinessSystem.table_count)))
+        total_tables = tables_result.scalar() or 0
 
         # 平均数据质量分数
-        avg_data_quality = db.query(func.avg(BusinessSystem.data_quality_score)).scalar()
-
+        quality_result = await db.execute(select(func.avg(BusinessSystem.data_quality_score)))
+        avg_data_quality = quality_result.scalar()
+        inactive_systems = total_systems - active_systems
         statistics = BusinessSystemStatistics(
             total_systems=total_systems,
             active_systems=active_systems,
@@ -383,9 +416,10 @@ class BusinessSystemService:
             return cached_count
 
         # 查询活跃系统数量
-        count = db.query(BusinessSystem).filter(
-            BusinessSystem.status == SystemStatus.ACTIVE.value
-        ).count()
+        result = await db.execute(
+            select(func.count(BusinessSystem.id)).where(BusinessSystem.status == SystemStatus.ACTIVE.value)
+        )
+        count = result.scalar()
 
         # 缓存结果
         await cache_service.set(cache_key, count, self.cache_ttl)
@@ -475,8 +509,13 @@ class BusinessSystemService:
                 'changed_by': 'system'  # 实际应用中应该记录操作用户
             })
 
-            db.commit()
-            db.refresh(system)
+            await db.commit()
+            await db.refresh(system)
+
+            # 添加显式字段加载
+            _ = system.created_at
+            _ = system.updated_at
+            _ = system.id
 
             # 清除相关缓存
             await self._invalidate_cache_patterns([
@@ -491,7 +530,7 @@ class BusinessSystemService:
             return system
 
         except Exception as e:
-            db.rollback()
+            await db.rollback()
             logger.error(f"更新系统状态失败: {e}")
             raise
 
@@ -511,12 +550,15 @@ class BusinessSystemService:
                 raise ValueError(f"业务系统 {system_id} 不存在")
 
             # 检查是否已存在相同的关联
-            existing = db.query(BusinessSystemDataSource).filter(
-                and_(
-                    BusinessSystemDataSource.business_system_id == system_id,
-                    BusinessSystemDataSource.data_source_name == association_data.data_source_name
+            result = await db.execute(
+                select(BusinessSystemDataSource).where(
+                    and_(
+                        BusinessSystemDataSource.business_system_id == system_id,
+                        BusinessSystemDataSource.data_source_name == association_data.data_source_name
+                    )
                 )
-            ).first()
+            )
+            existing = result.scalar_one_or_none()
 
             if existing:
                 raise ValueError(f"数据源关联已存在: {association_data.data_source_name}")
@@ -534,14 +576,21 @@ class BusinessSystemService:
             )
 
             db.add(db_association)
-            db.commit()
-            db.refresh(db_association)
+            await db.commit()
+            await db.refresh(db_association)
+
+            _ = db_association.created_at
+            _ = db_association.updated_at
+            _ = db_association.id
+
+            # 自动更新业务系统的表数量
+            await self._update_system_table_count(db, system_id)
 
             logger.info(f"添加数据源关联成功: {system.system_name} -> {association_data.data_source_name}")
             return db_association
 
         except Exception as e:
-            db.rollback()
+            await db.rollback()
             logger.error(f"添加数据源关联失败: {e}")
             raise
 
@@ -562,9 +611,10 @@ class BusinessSystemService:
         for i, system_data in enumerate(systems_data):
             try:
                 # 检查是否已存在
-                existing = db.query(BusinessSystem).filter(
-                    BusinessSystem.system_name == system_data.system_name
-                ).first()
+                result = await db.execute(
+                    select(BusinessSystem).where(BusinessSystem.system_name == system_data.system_name)
+                )
+                existing = result.scalar_one_or_none()
 
                 if existing and not overwrite_existing:
                     failed_items.append({
@@ -600,6 +650,100 @@ class BusinessSystemService:
             failed_items=failed_items,
             operation_time=datetime.now()
         )
+
+    async def get_system_data_sources(
+            self,
+            db: AsyncSession,
+            system_id: int
+    ) -> List[BusinessSystemDataSource]:
+        """获取业务系统的数据源关联"""
+        try:
+            result = await db.execute(
+                select(BusinessSystemDataSource).where(
+                    BusinessSystemDataSource.business_system_id == system_id
+                )
+            )
+            associations = result.scalars().all()
+
+            # 确保字段已加载
+            for assoc in associations:
+                _ = assoc.created_at
+                _ = assoc.updated_at
+                _ = assoc.id
+
+            return list(associations)
+
+        except Exception as e:
+            logger.error(f"获取数据源关联失败: {e}")
+            raise
+
+    async def _update_system_table_count(self, db: AsyncSession, system_id: int):
+        """更新业务系统的表数量统计"""
+        try:
+            # 获取该业务系统关联的所有数据源
+            result = await db.execute(
+                select(BusinessSystemDataSource).where(
+                    BusinessSystemDataSource.business_system_id == system_id
+                )
+            )
+            associations = result.scalars().all()
+
+            total_tables = 0
+            for assoc in associations:
+                # 从数据源表元数据中统计表数量
+                # 注意：这里需要确保你之前创建的 DataSourceTable 模型可以使用
+                try:
+                    from app.models.data_source import DataSourceTable
+                    table_result = await db.execute(
+                        select(func.count(DataSourceTable.id)).where(
+                            and_(
+                                DataSourceTable.data_source_name == assoc.data_source_name,
+                                DataSourceTable.is_active == True
+                            )
+                        )
+                    )
+                    count = table_result.scalar() or 0
+                    total_tables += count
+                    logger.info(f"数据源 {assoc.data_source_name} 包含 {count} 张表")
+                except Exception as e:
+                    logger.warning(f"无法统计数据源 {assoc.data_source_name} 的表数量: {e}")
+                    # 如果没有表元数据，尝试直接从数据源获取
+                    total_tables += await self._get_table_count_from_source(assoc.data_source_name)
+
+            # 更新业务系统的表数量和同步时间
+            system_result = await db.execute(
+                select(BusinessSystem).where(BusinessSystem.id == system_id)
+            )
+            system = system_result.scalar_one_or_none()
+
+            if system:
+                system.table_count = total_tables
+                system.last_data_sync = datetime.now()
+                await db.commit()
+                logger.info(f"更新业务系统 {system.system_name} 表数量: {total_tables}")
+
+            return total_tables
+
+        except Exception as e:
+            logger.error(f"更新系统表数量失败: {e}")
+            return 0
+
+    async def _get_table_count_from_source(self, data_source_name: str) -> int:
+        """从数据源直接获取表数量"""
+        try:
+            # 这里调用数据源管理模块的接口
+            from app.services.optimized_data_integration_service import get_optimized_data_integration_service
+            integration_service = get_optimized_data_integration_service()
+
+            # 获取表列表并计数
+            result = await integration_service.get_tables(data_source_name, limit=9999)
+            if result.get('success'):
+                return result.get('total_count', 0)
+            return 0
+
+        except Exception as e:
+            logger.warning(f"从数据源 {data_source_name} 获取表数量失败: {e}")
+            return 0
 
     # === 缓存管理 ===
 
