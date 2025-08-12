@@ -270,9 +270,9 @@ class SmartSyncService:
         for col in source_columns:
             source_type = col.get('data_type', 'VARCHAR').upper()
             target_col_type = self._map_data_type(source_type, target_type)
-
+            col_name = col.get('name', col.get('column_name', f'col_{len(mapped_columns)}'))
             mapped_columns.append({
-                "name": col['column_name'],
+                "name": col_name,
                 "source_type": source_type,
                 "target_type": target_col_type,
                 "nullable": col.get('is_nullable', True),
@@ -284,7 +284,7 @@ class SmartSyncService:
         return {
             "columns": mapped_columns,
             "mapping_strategy": "auto",
-            "type_conversions": self._get_type_conversion_summary(mapped_columns)
+            "total_columns": len(mapped_columns)
         }
 
     def _map_data_type(self, source_type: str, target_type: str) -> str:
@@ -555,12 +555,12 @@ class SmartSyncService:
 
             # 获取源表行数
             source_count_result = await self.integration_service.execute_query(
-                source_name, f"SELECT COUNT(*) as cnt FROM {source_table}", limit=1
+                source_name, f"SELECT COUNT(*) as cnt FROM {source_table}"
             )
 
             # 获取目标表行数
             target_count_result = await self.integration_service.execute_query(
-                target_name, f"SELECT COUNT(*) as cnt FROM {target_table}", limit=1
+                target_name, f"SELECT COUNT(*) as cnt FROM {target_table}"
             )
 
             if (source_count_result.get('success') and target_count_result.get('success')):
@@ -620,8 +620,8 @@ class SmartSyncService:
         warnings = []
 
         # 检查字符集兼容性
-        if source_config['type'] == 'mysql' and target_config['type'] == 'postgresql':
-            warnings.append("MySQL到PostgreSQL可能存在字符集转换问题")
+        if source_config['type'] == 'mysql' and target_config['type'] == 'kingbase':
+            warnings.append("MySQL到kingbase可能存在字符集转换问题")
 
         # 检查大表警告
         row_count = table_meta.get('statistics', {}).get('row_count', 0)
@@ -632,33 +632,60 @@ class SmartSyncService:
         columns = table_meta.get('schema', {}).get('columns', [])
         for col in columns:
             if col.get('data_type', '').upper() in ['JSON', 'JSONB']:
-                warnings.append(f"列 {col['column_name']} 使用JSON类型，请确保目标数据库支持")
+                col_name = col.get('name', col.get('column_name', '未知字段'))
+                warnings.append(f"列 {col_name} 使用JSON类型，请确保目标数据库支持")
 
         return warnings
 
     async def _get_data_source_config(self, source_name: str) -> Optional[Dict[str, Any]]:
         """获取数据源配置"""
-        # 这里应该从数据库或配置中获取数据源信息
-        # 暂时返回模拟数据
-        mock_configs = {
-            "MySQL-Production": {
-                "type": "mysql",
-                "host": "192.168.1.100",
-                "port": 3306,
-                "database": "production",
-                "username": "user",
-                "password": "password"
-            },
-            "Hive-Warehouse": {
-                "type": "hive",
-                "host": "192.168.1.101",
-                "port": 10000,
-                "database": "default",
-                "username": "hive",
-                "password": "hive"
+        try:
+            # 从实际的数据集成服务获取数据源配置
+            sources_list = await self.integration_service.get_data_sources_list_basic()
+
+            # 查找指定名称的数据源
+            target_source = None
+            for source in sources_list:
+                if source.get('name') == source_name:
+                    target_source = source
+                    break
+
+            if not target_source:
+                logger.error(f"未找到数据源: {source_name}")
+                return None
+
+            # 🔧 修复：确保类型映射正确
+            source_type = target_source.get('type', '').lower()
+            if not source_type:
+                logger.error(f"数据源 {source_name} 类型为空")
+                return None
+
+            # 映射数据源类型
+            type_mapping = {
+                'mysql': 'mysql',
+                'kingbase': 'kingbase',
+                'hive': 'hive',
+                'postgresql': 'postgresql',
+                'oracle': 'oracle'
             }
-        }
-        return mock_configs.get(source_name)
+
+            mapped_type = type_mapping.get(source_type, source_type)
+
+            config = {
+                "type": mapped_type,  # 🔧 使用映射后的类型
+                "host": target_source.get('host', ''),
+                "port": target_source.get('port', 3306),
+                "database": target_source.get('database', ''),
+                "username": target_source.get('username', ''),
+                "password": target_source.get('password', ''),
+            }
+
+            logger.info(f"获取数据源配置成功: {source_name} -> {mapped_type}")
+            return config
+
+        except Exception as e:
+            logger.error(f"获取数据源配置失败 {source_name}: {e}")
+            return None
 
     async def _check_target_table_exists(self, target_name: str, table_name: str) -> bool:
         """检查目标表是否存在"""
@@ -674,18 +701,99 @@ class SmartSyncService:
     async def _execute_create_table(self, target_name: str, create_sql: str) -> Dict[str, Any]:
         """执行建表SQL"""
         try:
+            # 🔧 修复：使用位置参数调用（2个参数）
             result = await self.integration_service.execute_query(
-                target_name, create_sql
+                target_name,  # source_name
+                create_sql  # query
             )
             return {
                 "success": result.get('success', False),
                 "message": "表创建成功" if result.get('success') else result.get('error', '创建失败')
             }
         except Exception as e:
+            logger.error(f"建表失败: {e}")
             return {
                 "success": False,
                 "message": f"建表失败: {str(e)}"
             }
+
+    async def _generate_sync_strategy(self, source_config: Dict[str, Any],
+                                      target_config: Dict[str, Any],
+                                      table_meta: Dict[str, Any],
+                                      target_exists: bool) -> str:
+        """生成同步策略"""
+        source_type = source_config.get('type', '').lower()
+        target_type = target_config.get('type', '').lower()
+        row_count = table_meta.get('statistics', {}).get('row_count', 0)
+
+        if target_exists:
+            return "incremental_update"  # 目标表存在，增量更新
+        elif row_count > 10000000:
+            return "batch_insert"  # 大表，批量插入
+        elif source_type == target_type:
+            return "direct_copy"  # 同类型数据库，直接复制
+        else:
+            return "full_copy"  # 不同类型，全量复制
+
+    def _determine_global_strategy(self, sync_mode: str, sync_plans: List[Dict]) -> str:
+        """确定全局同步策略"""
+        if sync_mode == "single":
+            return "单表同步"
+        elif sync_mode == "multiple":
+            return f"多表同步({len(sync_plans)}张表)"
+        elif sync_mode == "database":
+            return "整库同步"
+        else:
+            return "自定义同步"
+
+    async def _precheck_sync_conditions(self, sync_plan: Dict[str, Any]) -> Dict[str, Any]:
+        """预检查同步条件"""
+        try:
+            # 检查源数据源连接
+            source_name = sync_plan.get('source_name')
+            target_name = sync_plan.get('target_name')
+
+            if not source_name or not target_name:
+                return {
+                    "success": False,
+                    "error": "缺少源或目标数据源名称"
+                }
+
+            # 简单的连接检查
+            source_config = await self._get_data_source_config(source_name)
+            target_config = await self._get_data_source_config(target_name)
+
+            if not source_config or not target_config:
+                return {
+                    "success": False,
+                    "error": "数据源配置验证失败"
+                }
+
+            return {
+                "success": True,
+                "message": "预检查通过"
+            }
+
+        except Exception as e:
+            return {
+                "success": False,
+                "error": f"预检查失败: {str(e)}"
+            }
+
+    def _generate_sync_summary(self, sync_results: List[Dict]) -> Dict[str, Any]:
+        """生成同步摘要"""
+        total_tables = len(sync_results)
+        successful_tables = len([r for r in sync_results if r.get('result', {}).get('success')])
+        failed_tables = total_tables - successful_tables
+
+        return {
+            "total_tables": total_tables,
+            "successful_tables": successful_tables,
+            "failed_tables": failed_tables,
+            "success_rate": f"{(successful_tables / total_tables * 100):.1f}%" if total_tables > 0 else "0%",
+            "summary_message": f"共{total_tables}张表，成功{successful_tables}张，失败{failed_tables}张"
+        }
+
 
 
 # 全局智能同步服务实例

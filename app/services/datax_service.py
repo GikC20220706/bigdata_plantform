@@ -43,9 +43,27 @@ class DataXIntegrationService:
             }
 
     def _generate_datax_config(self, sync_config: Dict[str, Any]) -> Dict[str, Any]:
+
+
         """生成DataX配置"""
         source = sync_config['source']
         target = sync_config['target']
+        if target.get('type', '').lower() == 'hive':
+            # 从环境配置或target配置中获取namenode信息
+            target['namenode_host'] = target.get('namenode_host', '192.142.76.242')  # 从你的.env看到的
+            target['namenode_port'] = target.get('namenode_port', '8020')
+
+            # 动态生成HDFS路径
+            database = target.get('database', 'default')
+            table_name = target['table']
+            base_path = target.get('base_path', '/user/hive/warehouse')
+
+            # 生成完整的HDFS路径
+            target['hdfs_path'] = f"{base_path}/{database}.db/{table_name}"
+
+            # 设置默认文件名
+            if 'file_name' not in target:
+                target['file_name'] = f"{table_name}_data"
 
         # 根据数据源类型生成reader配置
         reader_config = self._get_reader_config(source)
@@ -102,14 +120,14 @@ class DataXIntegrationService:
                 }
             }
 
-        elif db_type == 'postgresql':
+        elif db_type == 'kingbase':
             return {
-                "name": "postgresqlreader",
+                "name": "kingbaseesreader",
                 "parameter": {
                     "username": source['username'],
                     "password": source['password'],
                     "connection": [{
-                        "jdbcUrl": [f"jdbc:postgresql://{source['host']}:{source['port']}/{source['database']}"],
+                        "jdbcUrl": [f"jdbc:kingbase8://{source['host']}:{source['port']}/{source['database']}"],
                         "querySql": [source.get('query', f"SELECT * FROM {source['table']}")]
                     }]
                 }
@@ -126,13 +144,19 @@ class DataXIntegrationService:
             return {
                 "name": "mysqlwriter",
                 "parameter": {
+                    "writeMode": target.get('write_mode', 'insert'),
                     "username": target['username'],
                     "password": target['password'],
+                    "column": target.get('columns', ["*"]),  # 新增：字段列表
                     "connection": [{
-                        "jdbcUrl": f"jdbc:mysql://{target['host']}:{target['port']}/{target['database']}",
-                        "table": [target['table']]
+                        "jdbcUrl": f"jdbc:mysql://{target['host']}:{target['port']}/{target['database']}?useUnicode=true&characterEncoding=utf8",
+                        # 修复：完整URL格式
+                        "table": [target['table']]  # 保持数组格式
                     }],
-                    "writeMode": target.get('write_mode', 'insert')
+                    # 可选配置
+                    "preSql": target.get('pre_sql', []),  # 新增：前置SQL
+                    "postSql": target.get('post_sql', []),  # 新增：后置SQL
+                    "session": target.get('session', [])  # 新增：会话设置
                 }
             }
 
@@ -147,6 +171,23 @@ class DataXIntegrationService:
                     "column": target.get('columns', [{"name": "*", "type": "string"}]),
                     "fieldDelimiter": "\t",
                     "writeMode": "append"
+                }
+            }
+
+        elif db_type == 'kingbase':
+            return {
+                "name": "kingbasewriter",
+                "parameter": {
+                    "username": target['username'],
+                    "password": target['password'],
+                    "column": target.get('columns', ["*"]),
+                    "connection": [{
+                        "jdbcUrl": f"jdbc:postgresql://{target['host']}:{target['port']}/{target['database']}",
+                        "table": [target['table']]
+                    }],
+                    "writeMode": target.get('write_mode', 'insert'),
+                    "preSql": target.get('pre_sql', []),
+                    "postSql": target.get('post_sql', [])
                 }
             }
 
@@ -239,6 +280,26 @@ class EnhancedSyncService:
     async def execute_sync_task(self, task_config: Dict[str, Any]) -> Dict[str, Any]:
         """执行数据同步任务"""
         try:
+            """验证同步配置"""
+            required_fields = ['source', 'target', 'id']
+            for field in required_fields:
+                if field not in task_config:
+                    raise ValueError(f"缺少必要字段: {field}")
+
+            # 验证数据源配置
+            source = task_config['source']
+            if 'type' not in source:
+                raise ValueError("数据源配置不完整：缺少type字段")
+
+            # 验证目标配置
+            target = task_config['target']
+            if 'type' not in target:
+                raise ValueError("目标配置不完整：缺少type字段")
+
+            # 🆕 新增：Hive目标的特殊验证
+            if target.get('type', '').lower() == 'hive':
+                if 'table' not in target:
+                    raise ValueError("Hive目标配置缺少table字段")
             # 验证配置
             self._validate_sync_config(task_config)
 

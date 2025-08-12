@@ -1415,14 +1415,59 @@ class OptimizedDataIntegrationService:
                 if not client:
                     continue
 
+                # 🔧 修复：正确获取数据源类型
+                db_type = 'unknown'
+
+                # 方法1: 从类名推断类型
+                class_name = client.__class__.__name__
+                if 'MySQL' in class_name:
+                    db_type = 'mysql'
+                elif 'KingBase' in class_name:
+                    db_type = 'kingbase'
+                elif 'Hive' in class_name:
+                    db_type = 'hive'
+                elif 'Doris' in class_name:
+                    db_type = 'doris'
+                elif 'PostgreSQL' in class_name:
+                    db_type = 'postgresql'
+                elif 'Oracle' in class_name:
+                    db_type = 'oracle'
+                else:
+                    # 方法2: 从配置推断类型
+                    if hasattr(client, 'config'):
+                        host = client.config.get('host', '')
+                        port = client.config.get('port', 0)
+
+                        if port == 3306:
+                            db_type = 'mysql'
+                        elif port == 54321:
+                            db_type = 'kingbase'
+                        elif port == 10000:
+                            db_type = 'hive'
+                        elif port == 9030:
+                            db_type = 'doris'
+                        elif port == 5432:
+                            db_type = 'postgresql'
+                        elif port == 1521:
+                            db_type = 'oracle'
+
                 source_info = {
                     "name": name,
-                    "type": client.db_type if hasattr(client, 'db_type') else 'unknown',
+                    "type": db_type,  # 🔧 使用修复后的类型
                     "status": "connected",
                     "last_test": datetime.now(),
                     "description": getattr(client, 'description', ''),
-                    "table_count": "未统计"  # 不查询，避免耗时
+                    "table_count": "未统计"
                 }
+
+                # 🔧 添加更多配置信息
+                if hasattr(client, 'config'):
+                    source_info.update({
+                        "host": client.config.get('host', ''),
+                        "port": client.config.get('port', 0),
+                        "database": client.config.get('database', ''),
+                        "username": client.config.get('username', '')
+                    })
 
                 sources.append(source_info)
 

@@ -2,12 +2,12 @@
 """
 智能数据同步API - 支持拖拽式可视化操作
 """
+import asyncio
 
-from fastapi import APIRouter, HTTPException, BackgroundTasks, Body
+from fastapi import APIRouter, HTTPException, BackgroundTasks, Body, Query
 from typing import Dict, List, Any, Optional
 from datetime import datetime
 from pydantic import BaseModel, Field
-
 from app.services.smart_sync_service import smart_sync_service
 from app.utils.response import create_response
 from loguru import logger
@@ -36,44 +36,19 @@ class SmartSyncRequest(BaseModel):
 async def get_available_sources():
     """获取所有可用的数据源，用于拖拽界面"""
     try:
-        # 获取数据源列表
-        sources_result = await smart_sync_service.integration_service.get_data_sources_list()
+        # 修复1: 使用新的基础数据源列表方法
+        sources_result = await smart_sync_service.integration_service.get_data_sources_list_basic()
 
-        # 为每个数据源获取表列表
+        # 修复2: 不查询表信息，避免阻塞
         enhanced_sources = []
         for source in sources_result:
-            if source.get('status') == 'connected':
-                try:
-                    # 获取表列表
-                    tables_result = await smart_sync_service.integration_service.get_tables(source['name'])
-                    tables = tables_result.get('tables', []) if tables_result.get('success') else []
-
-                    # 增强表信息
-                    enhanced_tables = []
-                    for table in tables[:10]:  # 限制显示前10个表，避免界面过载
-                        table_info = {
-                            "name": table.get('table_name', table.get('name', '')),
-                            "rows": table.get('estimated_rows', 0),
-                            "size": table.get('estimated_size', '未知'),
-                            "type": table.get('table_type', 'TABLE')
-                        }
-                        enhanced_tables.append(table_info)
-
-                    enhanced_source = {
-                        **source,
-                        "tables": enhanced_tables,
-                        "total_tables": len(tables)
-                    }
-                    enhanced_sources.append(enhanced_source)
-
-                except Exception as e:
-                    logger.warning(f"获取数据源 {source['name']} 的表列表失败: {e}")
-                    enhanced_sources.append({
-                        **source,
-                        "tables": [],
-                        "total_tables": 0,
-                        "error": str(e)
-                    })
+            enhanced_source = {
+                **source,
+                "tables": [],  # 不查询表信息
+                "total_tables": "点击查看",  # 延迟加载
+                "lazy_load": True
+            }
+            enhanced_sources.append(enhanced_source)
 
         return create_response(
             data={
@@ -88,6 +63,28 @@ async def get_available_sources():
         logger.error(f"获取可用数据源失败: {e}")
         raise HTTPException(status_code=500, detail=f"获取可用数据源失败: {str(e)}")
 
+
+@router.get("/sources/{source_name}/tables", summary="获取指定数据源的表列表")
+async def get_source_tables(source_name: str, limit: int = Query(50, description="限制返回表数量")):
+    """按需获取数据源表列表"""
+    try:
+        tables_result = await smart_sync_service.integration_service.get_tables(
+            source_name, limit=limit
+        )
+
+        if tables_result.get('success'):
+            return create_response(
+                data=tables_result,
+                message=f"获取数据源 {source_name} 的表列表成功"
+            )
+        else:
+            raise HTTPException(
+                status_code=400,
+                detail=tables_result.get('error', '获取表列表失败')
+            )
+    except Exception as e:
+        logger.error(f"获取表列表失败: {e}")
+        raise HTTPException(status_code=500, detail=f"获取表列表失败: {str(e)}")
 
 @router.post("/analyze", summary="分析同步计划")
 async def analyze_sync_plan(request: SmartSyncRequest):
@@ -229,8 +226,8 @@ async def validate_target_config(
 ):
     """验证目标数据源和表配置"""
     try:
-        # 检查目标数据源连接
-        sources_result = await smart_sync_service.integration_service.get_data_sources_list()
+        # 修改：使用新的基础数据源列表方法
+        sources_result = await smart_sync_service.integration_service.get_data_sources_list_basic()
         target_source = next((s for s in sources_result if s['name'] == target_name), None)
 
         if not target_source:
@@ -258,14 +255,16 @@ async def validate_target_config(
                 {
                     "table_name": table,
                     "exists": table in existing_tables,
-                    "will_create": table not in existing_tables,
-                    "status": "exists" if table in existing_tables else "will_create"
+                    "can_create": True,  # 假设都可以创建
+                    "validation_status": "exists" if table in existing_tables else "will_create"
                 }
                 for table in target_tables
             ],
-            "total_tables": len(target_tables),
-            "existing_tables": len(existing_tables),
-            "tables_to_create": len(target_tables) - len(existing_tables)
+            "summary": {
+                "total_tables": len(target_tables),
+                "existing_tables": len(existing_tables),
+                "new_tables": len(target_tables) - len(existing_tables)
+            }
         }
 
         return create_response(
@@ -454,3 +453,26 @@ async def _get_sync_status_from_cache(sync_id: str) -> Optional[Dict[str, Any]]:
     except Exception as e:
         logger.error(f"获取同步状态失败: {e}")
         return None
+
+async def _get_source_tables_safe(integration_service, source_name: str, timeout: int = 10):
+    """安全获取数据源表信息，带超时保护"""
+    try:
+        # 使用asyncio.wait_for添加超时保护
+        return await asyncio.wait_for(
+            integration_service.get_tables(source_name, limit=100),  # 限制查询100张表
+            timeout=timeout
+        )
+    except asyncio.TimeoutError:
+        logger.warning(f"获取数据源 {source_name} 表信息超时({timeout}秒)")
+        return {
+            "success": False,
+            "error": "查询超时",
+            "tables": []
+        }
+    except Exception as e:
+        logger.warning(f"获取数据源 {source_name} 表信息异常: {e}")
+        return {
+            "success": False,
+            "error": str(e),
+            "tables": []
+        }
