@@ -1404,6 +1404,140 @@ class OptimizedDataIntegrationService:
             }
         }
 
+    async def get_data_sources_list_basic(self) -> List[Dict[str, Any]]:
+        """获取基础数据源列表 - 不查询表数量，性能优化"""
+        sources = []
+        client_names = self.connection_manager.list_clients()
+
+        for name in client_names:
+            try:
+                client = self.connection_manager.get_client(name)
+                if not client:
+                    continue
+
+                source_info = {
+                    "name": name,
+                    "type": client.db_type if hasattr(client, 'db_type') else 'unknown',
+                    "status": "connected",
+                    "last_test": datetime.now(),
+                    "description": getattr(client, 'description', ''),
+                    "table_count": "未统计"  # 不查询，避免耗时
+                }
+
+                sources.append(source_info)
+
+            except Exception as e:
+                logger.error(f"获取数据源基础信息失败 {name}: {e}")
+                sources.append({
+                    "name": name,
+                    "type": "unknown",
+                    "status": "error",
+                    "error": str(e),
+                    "table_count": "未知"
+                })
+
+        return sources
+
+    async def get_data_sources_list_with_limited_stats(
+            self,
+            table_limit: int = 1000,
+            fast_mode: bool = True
+    ) -> List[Dict[str, Any]]:
+        """获取带限制统计的数据源列表 - 性能优化版本"""
+        sources = []
+        client_names = self.connection_manager.list_clients()
+
+        for name in client_names:
+            try:
+                client = self.connection_manager.get_client(name)
+                if not client:
+                    continue
+
+                source_info = {
+                    "name": name,
+                    "type": client.db_type if hasattr(client, 'db_type') else 'unknown',
+                    "status": "connected",
+                    "last_test": datetime.now(),
+                    "description": getattr(client, 'description', '')
+                }
+
+                # 根据模式获取表数量
+                if fast_mode:
+                    # 快速模式：使用缓存或预估
+                    table_count = await self._get_table_count_fast(name, limit=table_limit)
+                else:
+                    # 准确模式：实际查询但有限制
+                    table_count = await self._get_table_count_accurate(name, limit=table_limit)
+
+                source_info["table_count"] = table_count
+                source_info["table_count_limited"] = table_count >= table_limit
+
+                sources.append(source_info)
+
+            except Exception as e:
+                logger.error(f"获取数据源信息失败 {name}: {e}")
+                sources.append({
+                    "name": name,
+                    "type": "unknown",
+                    "status": "error",
+                    "error": str(e),
+                    "table_count": 0
+                })
+
+        return sources
+
+    async def _get_table_count_fast(self, source_name: str, limit: int = 1000) -> int:
+        """快速获取表数量 - 优先使用缓存"""
+        try:
+            # 先尝试从缓存获取
+            cache_key = f"table_count_fast_{source_name}"
+            cached_count = await self.cache_manager.get_cached_data(
+                cache_key,
+                lambda: self._count_tables_with_limit(source_name, limit),
+                {'redis': 1800}  # 30分钟缓存
+            )
+            return cached_count
+
+        except Exception as e:
+            logger.warning(f"快速获取表数量失败 {source_name}: {e}")
+            return 0
+
+    async def _count_tables_with_limit(self, source_name: str, limit: int) -> int:
+        """使用限制的表数量统计"""
+        try:
+            client = self.connection_manager.get_client(source_name)
+            if not client:
+                return 0
+
+            # 只查询指定数量的表，避免大量查询
+            result = await client.get_tables(limit=min(limit, 500), offset=0)  # 最多查500张表
+            if result.get('success'):
+                tables = result.get('tables', [])
+                return len(tables)
+            return 0
+
+        except Exception as e:
+            logger.warning(f"统计表数量失败 {source_name}: {e}")
+            return 0
+
+    async def _get_table_count_accurate(self, source_name: str, limit: int) -> int:
+        """准确获取表数量 - 但有限制"""
+        try:
+            client = self.connection_manager.get_client(source_name)
+            if not client:
+                return 0
+
+            # 如果客户端支持 count 方法，优先使用
+            if hasattr(client, 'get_tables_count'):
+                return await client.get_tables_count()
+
+            # 否则通过查询表列表来统计，但有限制
+            return await self._count_tables_with_limit(source_name, limit)
+
+        except Exception as e:
+            logger.warning(f"准确获取表数量失败 {source_name}: {e}")
+            return 0
+
 
 _service_instance = None
 

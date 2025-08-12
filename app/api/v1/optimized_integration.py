@@ -21,16 +21,35 @@ async def get_integration_overview():
 
 # 2. 数据源管理
 @router.get("/sources", summary="获取数据源列表")
-async def get_data_sources():
+async def get_data_sources(
+        include_table_count: bool = Query(False, description="是否包含表数量统计"),
+        table_count_limit: int = Query(1000, ge=1, le=10000, description="表数量统计的最大查询数量"),
+        fast_mode: bool = Query(True, description="是否使用快速模式（避免耗时查询）")
+):
     try:
         service = get_optimized_data_integration_service()
-        sources = await service.get_data_sources_list()
+
+        if include_table_count:
+            # 获取带表数量的详细信息，但限制查询范围
+            sources = await service.get_data_sources_list_with_limited_stats(
+                table_limit=table_count_limit,
+                fast_mode=fast_mode
+            )
+        else:
+            # 获取基础信息，不查询表数量
+            sources = await service.get_data_sources_list_basic()
+
         return create_response(
             data={
                 "sources": sources,
                 "total": len(sources),
                 "connected": len([s for s in sources if s.get('status') == 'connected']),
-                "disconnected": len([s for s in sources if s.get('status') == 'disconnected'])
+                "disconnected": len([s for s in sources if s.get('status') != 'connected']),
+                "query_params": {
+                    "include_table_count": include_table_count,
+                    "table_count_limit": table_count_limit if include_table_count else None,
+                    "fast_mode": fast_mode
+                }
             },
             message="获取数据源列表成功"
         )

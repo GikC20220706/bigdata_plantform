@@ -678,7 +678,7 @@ class BusinessSystemService:
             raise
 
     async def _update_system_table_count(self, db: AsyncSession, system_id: int):
-        """更新业务系统的表数量统计"""
+        """更新业务系统的表数量统计 - 保留准确数据"""
         try:
             # 获取该业务系统关联的所有数据源
             result = await db.execute(
@@ -690,25 +690,19 @@ class BusinessSystemService:
 
             total_tables = 0
             for assoc in associations:
-                # 从数据源表元数据中统计表数量
-                # 注意：这里需要确保你之前创建的 DataSourceTable 模型可以使用
                 try:
-                    from app.models.data_source import DataSourceTable
-                    table_result = await db.execute(
-                        select(func.count(DataSourceTable.id)).where(
-                            and_(
-                                DataSourceTable.data_source_name == assoc.data_source_name,
-                                DataSourceTable.is_active == True
-                            )
-                        )
+                    # 策略1：优先从我们之前建的表元数据缓存中获取
+                    table_count = await self._get_cached_or_refresh_table_count(
+                        db,
+                        assoc.data_source_name,
+                        assoc.database_name
                     )
-                    count = table_result.scalar() or 0
-                    total_tables += count
-                    logger.info(f"数据源 {assoc.data_source_name} 包含 {count} 张表")
+                    total_tables += table_count
+                    logger.info(f"数据源 {assoc.data_source_name} 表数量: {table_count}")
+
                 except Exception as e:
-                    logger.warning(f"无法统计数据源 {assoc.data_source_name} 的表数量: {e}")
-                    # 如果没有表元数据，尝试直接从数据源获取
-                    total_tables += await self._get_table_count_from_source(assoc.data_source_name)
+                    logger.warning(f"统计数据源 {assoc.data_source_name} 表数量失败: {e}")
+                    continue
 
             # 更新业务系统的表数量和同步时间
             system_result = await db.execute(
@@ -720,12 +714,72 @@ class BusinessSystemService:
                 system.table_count = total_tables
                 system.last_data_sync = datetime.now()
                 await db.commit()
-                logger.info(f"更新业务系统 {system.system_name} 表数量: {total_tables}")
+                logger.info(f"业务系统 {system.system_name} 表数量更新: {total_tables}")
 
             return total_tables
 
         except Exception as e:
             logger.error(f"更新系统表数量失败: {e}")
+            return 0
+
+    async def _get_cached_or_refresh_table_count(
+            self,
+            db: AsyncSession,
+            data_source_name: str,
+            database_name: str = None
+    ) -> int:
+        """获取缓存的表数量，如果没有则刷新缓存"""
+        try:
+            from app.models.data_source import DataSourceTable
+
+            # 策略1：检查是否有最新的表元数据缓存
+            table_result = await db.execute(
+                select(func.count(DataSourceTable.id)).where(
+                    and_(
+                        DataSourceTable.data_source_name == data_source_name,
+                        DataSourceTable.database_name == database_name,
+                        DataSourceTable.is_active == True,
+                        # 检查缓存是否在24小时内更新过
+                        DataSourceTable.last_refreshed >= datetime.now() - timedelta(hours=24)
+                    )
+                )
+            )
+            cached_count = table_result.scalar() or 0
+
+            if cached_count > 0:
+                logger.info(f"使用24小时内的缓存数据: {data_source_name} = {cached_count} 张表")
+                return cached_count
+
+            # 略2：如果缓存过期或不存在，触发后台刷新
+            logger.info(f"缓存过期，触发后台刷新: {data_source_name}")
+            return await self._refresh_and_get_table_count(data_source_name, database_name)
+
+        except Exception as e:
+            logger.error(f"获取表数量失败: {e}")
+            return 0
+
+    async def _refresh_and_get_table_count(self, data_source_name: str, database_name: str = None) -> int:
+        """刷新并获取准确的表数量"""
+        try:
+            from app.services.optimized_data_integration_service import get_optimized_data_integration_service
+            integration_service = get_optimized_data_integration_service()
+
+            # 策略3：先刷新表元数据到数据库（这里会有限制，比如最多5000张表）
+            refresh_result = await integration_service._refresh_tables_to_db(
+                data_source_name,
+                database_name,
+                max_tables=5000  # 限制最大数量，避免无限查询
+            )
+
+            if refresh_result.get('success'):
+                return refresh_result.get('refreshed_count', 0)
+            else:
+                # 如果刷新失败，使用快速估算
+                logger.warning(f"刷新失败，使用快速估算: {data_source_name}")
+                return await integration_service._get_table_count_fast(data_source_name, limit=1000)
+
+        except Exception as e:
+            logger.error(f"刷新表数量失败: {e}")
             return 0
 
     async def _get_table_count_from_source(self, data_source_name: str) -> int:
