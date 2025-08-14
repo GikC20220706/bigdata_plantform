@@ -6,6 +6,7 @@
 import asyncio
 import json
 import tempfile
+import traceback
 from datetime import datetime
 from typing import Dict, List, Any, Optional
 from pathlib import Path
@@ -28,7 +29,7 @@ class SmartSyncService:
         try:
             source_name = sync_request['source_name']
             target_name = sync_request['target_name']
-            tables = sync_request['tables']  # [{'source_table': 'users', 'target_table': 'users_copy'}]
+            tables = sync_request['tables']
             sync_mode = sync_request.get('sync_mode', 'single')
 
             # 获取源和目标数据源配置
@@ -41,6 +42,9 @@ class SmartSyncService:
                     "error": "数据源配置不存在"
                 }
 
+            # 保存源数据库类型，供字段长度分析使用
+            self._current_source_type = source_config.get('type', 'mysql')
+
             # 分析每个表的同步计划
             sync_plans = []
             total_estimated_time = 0
@@ -50,12 +54,20 @@ class SmartSyncService:
                 source_table = table_info['source_table']
                 target_table = table_info['target_table']
 
+                logger.info(f"分析表: {source_table} -> {target_table}")
+
+                # 保存当前表信息
+                self._current_source_name = source_name
+                self._current_table_name = source_table
+                self._current_target_type = target_config['type']
+
                 # 获取源表元数据
                 source_metadata = await self.integration_service.get_table_metadata(
                     source_name, source_table
                 )
 
                 if not source_metadata.get('success'):
+                    logger.error(f"获取源表 {source_table} 元数据失败")
                     continue
 
                 table_meta = source_metadata['metadata']
@@ -131,19 +143,28 @@ class SmartSyncService:
 
             for plan in sync_plan['sync_plans']:
                 try:
+                    logger.info(f"开始同步表: {plan['source_table']} -> {plan['target_table']}")
+
                     # 生成DataX配置
                     datax_config = await self._generate_datax_config(sync_plan, plan)
+                    logger.info(f"DataX配置生成成功: {datax_config}")
 
                     # 执行同步
+                    logger.info(f"开始执行DataX同步任务...")
                     sync_result = await self.datax_service.execute_sync_task(datax_config)
+                    logger.info(f"DataX执行结果: {sync_result}")
 
                     if sync_result.get('success'):
                         successful_syncs += 1
+                        logger.info(f"表 {plan['source_table']} 同步成功")
                         # 验证数据完整性
                         verification = await self._verify_sync_integrity(sync_plan, plan)
                         sync_result['verification'] = verification
+                        logger.info(f"数据验证结果: {verification}")
                     else:
                         failed_syncs += 1
+                        error_msg = sync_result.get('error', '未知错误')
+                        logger.error(f"表 {plan['source_table']} 同步失败: {error_msg}")
 
                     sync_results.append({
                         "table": plan['source_table'],
@@ -153,12 +174,18 @@ class SmartSyncService:
 
                 except Exception as e:
                     failed_syncs += 1
+                    error_msg = f"同步异常: {str(e)}"
+                    logger.error(f"表 {plan['source_table']} 同步异常: {error_msg}")
+                    logger.error(f"异常详情: {traceback.format_exc()}")
+
                     sync_results.append({
                         "table": plan['source_table'],
                         "target_table": plan['target_table'],
                         "result": {
                             "success": False,
-                            "error": str(e)
+                            "error": error_msg,
+                            "error_type": "exception",
+                            "traceback": traceback.format_exc()
                         }
                     })
 
@@ -230,47 +257,119 @@ class SmartSyncService:
             col_type = col['target_type']
             nullable = "NULL" if col.get('nullable', True) else "NOT NULL"
 
-            columns.append(f"    {col_name} {col_type} {nullable}")
-
-        # 🔧 修复：先定义换行符变量，避免在f-string中使用反斜杠
+            # 根据数据库类型使用正确的引号格式
+            if target_type == 'kingbase':
+                columns.append(f'    "{col_name}" {col_type} {nullable}')
+            elif target_type == 'mysql':
+                columns.append(f'    `{col_name}` {col_type} {nullable}')
+            elif target_type == 'doris':
+                columns.append(f'    `{col_name}` {col_type} {nullable}')
+            else:
+                # PostgreSQL, Oracle等使用双引号或不用引号
+                columns.append(f'    "{col_name}" {col_type} {nullable}')
         newline = '\n'
         column_definitions = f',{newline}'.join(columns)
 
         if target_type == 'mysql':
-            sql = f"""CREATE TABLE IF NOT EXISTS {table_name} (
-    {column_definitions}
-    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;""".strip()
+            sql = f"""CREATE TABLE IF NOT EXISTS `{table_name}` (
+        {column_definitions}
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;""".strip()
+
+        elif target_type == 'doris':
+            # Doris建表语句
+            first_column = schema_mapping['columns'][0]['name']
+            sql = f"""CREATE TABLE IF NOT EXISTS `{table_name}` (
+        {column_definitions}
+        ) ENGINE=OLAP
+        DUPLICATE KEY(`{first_column}`)
+        DISTRIBUTED BY HASH(`{first_column}`) BUCKETS 1
+        PROPERTIES (
+            "replication_allocation" = "tag.location.default: 1"
+        );""".strip()
 
         elif target_type == 'postgresql':
-            sql = f"""CREATE TABLE IF NOT EXISTS {table_name} (
-    {column_definitions}
-    );""".strip()
+            sql = f"""CREATE TABLE IF NOT EXISTS "{table_name}" (
+        {column_definitions}
+        );""".strip()
+
+        elif target_type == 'kingbase':
+            sql = f'''CREATE TABLE IF NOT EXISTS "{table_name}" (
+            {column_definitions}
+            );'''.strip()
 
         elif target_type == 'hive':
-            sql = f"""CREATE TABLE IF NOT EXISTS {table_name} (
-    {column_definitions}
-    ) 
-    STORED AS TEXTFILE
-    LOCATION '/user/hive/warehouse/{table_name}';""".strip()
+            sql = f"""CREATE TABLE IF NOT EXISTS `{table_name}` (
+        {column_definitions}
+        ) 
+        STORED AS TEXTFILE
+        LOCATION '/user/hive/warehouse/{table_name}';""".strip()
+
+        elif target_type == 'oracle':
+            sql = f"""CREATE TABLE "{table_name}" (
+        {column_definitions}
+        );""".strip()
 
         else:
             # 通用SQL
-            sql = f"""CREATE TABLE IF NOT EXISTS {table_name} (
-    {column_definitions}
-    );""".strip()
+            sql = f"""CREATE TABLE IF NOT EXISTS `{table_name}` (
+        {column_definitions}
+        );""".strip()
 
+        logger.info(f"生成{target_type}建表SQL: {sql}")
         return sql
 
-    async def _generate_schema_mapping(self, table_metadata: Dict[str, Any],
-                                       target_type: str) -> Dict[str, Any]:
+    async def _generate_schema_mapping(self, table_metadata: Dict[str, Any], target_type: str) -> Dict[str, Any]:
         """生成schema映射"""
         source_columns = table_metadata.get('schema', {}).get('columns', [])
-        mapped_columns = []
 
-        for col in source_columns:
+        if not source_columns:
+            logger.error("源表没有字段信息")
+            raise ValueError("源表字段信息缺失")
+
+        mapped_columns = []
+        total_columns = len(source_columns)
+
+        # 如果是MySQL目标且字段很多，分析实际字段长度
+        field_lengths = {}
+        if target_type.lower() == 'mysql' and total_columns > 30:
+            logger.info(f"MySQL目标表有{total_columns}个字段，开始智能长度分析...")
+            try:
+                # 获取当前处理的源表信息
+                source_name = getattr(self, '_current_source_name', None)
+                table_name = getattr(self, '_current_table_name', None)
+
+                if source_name and table_name:
+                    # 传递字段信息进行长度分析
+                    field_lengths = await self._analyze_field_lengths(source_name, table_name, source_columns)
+                else:
+                    logger.warning("无法获取源表信息，跳过智能长度分析")
+            except Exception as e:
+                logger.warning(f"智能长度分析失败: {e}")
+
+        for i, col in enumerate(source_columns):
             source_type = col.get('data_type', 'VARCHAR').upper()
-            target_col_type = self._map_data_type(source_type, target_type)
-            col_name = col.get('name', col.get('column_name', f'col_{len(mapped_columns)}'))
+            col_name = col.get('name', col.get('column_name', f'column_{i}'))
+
+            if not col_name:
+                col_name = f'column_{i}'
+
+            # 使用智能长度或默认映射
+            if col_name in field_lengths and target_type.lower() == 'mysql':
+                recommended_length = field_lengths[col_name]
+                if recommended_length == 'TEXT':
+                    target_col_type = 'TEXT'
+                else:
+                    target_col_type = f'VARCHAR({recommended_length})'
+                logger.info(f"字段 {col_name} 使用智能长度: {target_col_type}")
+            else:
+                target_col_type = self._map_data_type(source_type, target_type)
+
+                # 如果没有智能分析，但字段很多，适当减少长度
+                if (target_type.lower() == 'mysql' and 'VARCHAR(255)' in target_col_type and
+                        total_columns > 50 and col_name not in field_lengths):
+                    target_col_type = 'VARCHAR(120)'  # 适度减少
+                    logger.info(f"字段 {col_name} 使用默认优化长度: {target_col_type}")
+
             mapped_columns.append({
                 "name": col_name,
                 "source_type": source_type,
@@ -281,10 +380,13 @@ class SmartSyncService:
                 "scale": col.get('numeric_scale')
             })
 
+        logger.info(f"字段映射生成完成，共 {len(mapped_columns)} 个字段")
+
         return {
             "columns": mapped_columns,
-            "mapping_strategy": "auto",
-            "total_columns": len(mapped_columns)
+            "mapping_strategy": "intelligent" if field_lengths else "auto",
+            "total_columns": len(mapped_columns),
+            "analyzed_fields": len(field_lengths)
         }
 
     def _map_data_type(self, source_type: str, target_type: str) -> str:
@@ -520,29 +622,169 @@ class SmartSyncService:
             }
             return default_mappings.get(target_type.lower(), 'VARCHAR(255)')
 
-    async def _generate_datax_config(self, sync_plan: Dict[str, Any],
-                                     table_plan: Dict[str, Any]) -> Dict[str, Any]:
+    async def _generate_datax_config(self, sync_plan: Dict[str, Any], table_plan: Dict[str, Any]) -> Dict[str, Any]:
         """生成DataX配置"""
-        source_config = await self._get_data_source_config(sync_plan['source_name'])
-        target_config = await self._get_data_source_config(sync_plan['target_name'])
+        try:
+            source_config = await self._get_data_source_config(sync_plan['source_name'])
+            target_config = await self._get_data_source_config(sync_plan['target_name'])
 
-        return {
-            "id": f"sync_{sync_plan['source_name']}_{table_plan['source_table']}",
-            "name": f"{table_plan['source_table']} -> {table_plan['target_table']}",
-            "source": {
-                **source_config,
-                "table": table_plan['source_table'],
-                "query": f"SELECT * FROM {table_plan['source_table']}"
-            },
-            "target": {
-                **target_config,
-                "table": table_plan['target_table'],
-                "write_mode": "insert"
-            },
-            "sync_type": "full",
-            "parallel_jobs": sync_plan.get('recommended_parallel_jobs', 4),
-            "schema_mapping": table_plan['schema_mapping']
-        }
+            if not source_config:
+                raise ValueError(f"无法获取源数据源配置: {sync_plan['source_name']}")
+            if not target_config:
+                raise ValueError(f"无法获取目标数据源配置: {sync_plan['target_name']}")
+
+            # 保存当前处理的表信息，供其他方法使用
+            self._current_source_name = sync_plan['source_name']
+            self._current_table_name = table_plan['source_table']
+            self._current_target_type = target_config['type']
+
+            # 获取字段映射信息
+            schema_mapping = table_plan.get('schema_mapping', {})
+            columns_mapping = schema_mapping.get('columns', [])
+
+            if not columns_mapping:
+                logger.error(f"表 {table_plan['source_table']} 没有字段映射信息")
+                raise ValueError(f"表 {table_plan['source_table']} 缺少字段映射信息")
+
+            # 生成明确的字段列表
+            source_columns = [col['name'] for col in columns_mapping]
+            target_columns = [col['name'] for col in columns_mapping]
+
+            if not source_columns:
+                raise ValueError(f"源表 {table_plan['source_table']} 字段列表为空")
+            if not target_columns:
+                raise ValueError(f"目标表 {table_plan['target_table']} 字段列表为空")
+
+            logger.info(f"字段映射: 源字段({len(source_columns)})={source_columns[:5]}...")
+            logger.info(f"字段映射: 目标字段({len(target_columns)})={target_columns[:5]}...")
+
+            # 确定写入模式
+            write_mode = self._determine_write_mode(table_plan, sync_plan.get('sync_mode', 'full'))
+
+            datax_config = {
+                "id": f"sync_{sync_plan['source_name']}_{table_plan['source_table']}",
+                "name": f"{table_plan['source_table']} -> {table_plan['target_table']}",
+                "source": {
+                    **source_config,
+                    "table": table_plan['source_table'],
+                    "columns": source_columns
+                },
+                "target": {
+                    **target_config,
+                    "table": table_plan['target_table'],
+                    "write_mode": write_mode,
+                    "columns": target_columns
+                },
+                "sync_type": "full",
+                "parallel_jobs": sync_plan.get('recommended_parallel_jobs', 4),
+                "schema_mapping": table_plan['schema_mapping']
+            }
+
+            logger.info(f"DataX配置生成完成，源字段数: {len(source_columns)}, 目标字段数: {len(target_columns)}")
+            return datax_config
+
+        except Exception as e:
+            logger.error(f"DataX配置生成失败: {str(e)}")
+            raise e
+
+    async def _analyze_field_lengths(self, source_name: str, table_name: str, columns: List[Dict]) -> Dict[str, int]:
+        """分析字段实际使用的最大长度"""
+        field_lengths = {}
+
+        try:
+            logger.info(f"开始分析表 {table_name} 的字段长度...")
+
+            # 筛选出可能需要长度分析的字段
+            text_columns = []
+            for col in columns:
+                col_name = col.get('name', '')
+                source_type = col.get('source_type', '').upper()
+                if source_type in ['VARCHAR', 'CHAR', 'TEXT', 'CHARACTER VARYING']:
+                    text_columns.append(col_name)
+
+            if not text_columns:
+                logger.info("没有需要分析长度的文本字段")
+                return field_lengths
+
+            logger.info(f"需要分析长度的字段: {text_columns}")
+
+            # 分批分析字段（避免SQL太长）
+            batch_size = 10
+            for i in range(0, len(text_columns), batch_size):
+                batch_columns = text_columns[i:i + batch_size]
+
+                # 构建长度查询SQL
+                length_queries = []
+                for col in batch_columns:
+                    # 根据不同数据库使用不同的长度函数
+                    if hasattr(self, '_current_source_type'):
+                        source_type = getattr(self, '_current_source_type', 'mysql').lower()
+                    else:
+                        source_type = 'mysql'  # 默认
+
+                    if source_type in ['kingbase', 'postgresql']:
+                        length_queries.append(f'MAX(LENGTH("{col}")) as "{col}_len"')
+                    else:
+                        length_queries.append(f'MAX(LENGTH(`{col}`)) as {col}_len')
+
+                if length_queries:
+                    sql = f"SELECT {', '.join(length_queries)} FROM {table_name} LIMIT 1"
+                    logger.info(f"执行长度分析SQL: {sql}")
+
+                    result = await self.integration_service.execute_query(
+                        source_name=source_name,
+                        query=sql,
+                        limit=1
+                    )
+
+                    if result.get('success') and result.get('results'):
+                        row = result['results'][0]
+                        for col in batch_columns:
+                            length_key = f"{col}_len"
+                            actual_length = row.get(length_key, 0) or 0
+
+                            # 智能推荐长度
+                            if actual_length == 0:
+                                recommended_length = 100  # 如果没有数据，使用默认值
+                            elif actual_length <= 50:
+                                recommended_length = 100  # 短字段，给一些余量
+                            elif actual_length <= 200:
+                                recommended_length = min(actual_length + 100, 300)  # 中等字段
+                            elif actual_length <= 1000:
+                                recommended_length = min(actual_length + 200, 1200)  # 较长字段
+                            else:
+                                recommended_length = 'TEXT'  # 很长的字段用TEXT
+
+                            field_lengths[col] = recommended_length
+                            logger.info(f"字段 {col} - 实际最大长度: {actual_length}, 推荐: {recommended_length}")
+                    else:
+                        logger.warning(f"字段长度分析失败: {result.get('error', '未知错误')}")
+                        # 如果分析失败，给所有字段设置默认值
+                        for col in batch_columns:
+                            field_lengths[col] = 150
+
+        except Exception as e:
+            logger.error(f"分析字段长度异常: {e}")
+            # 异常时给所有文本字段设置保守的默认值
+            for col in columns:
+                if col.get('source_type', '').upper() in ['VARCHAR', 'CHAR', 'TEXT']:
+                    field_lengths[col.get('name', '')] = 150
+
+        logger.info(f"字段长度分析完成，结果: {field_lengths}")
+        return field_lengths
+    def _determine_write_mode(self, table_plan: Dict[str, Any], sync_mode: str) -> str:
+        """根据情况决定写入模式"""
+        target_exists = table_plan.get('target_exists', False)
+        strategy = table_plan.get('strategy', 'full_copy')
+
+        if not target_exists:
+            return "insert"
+        elif strategy == 'incremental_update':
+            return "insert"
+        elif sync_mode == 'full' or strategy in ['full_copy', 'batch_insert']:
+            return "replace"
+        else:
+            return "insert"
 
     async def _verify_sync_integrity(self, sync_plan: Dict[str, Any],
                                      table_plan: Dict[str, Any]) -> Dict[str, Any]:
@@ -666,21 +908,50 @@ class SmartSyncService:
                 'kingbase': 'kingbase',
                 'hive': 'hive',
                 'postgresql': 'postgresql',
-                'oracle': 'oracle'
+                'oracle': 'oracle',
+                'doris': 'doris'
             }
 
             mapped_type = type_mapping.get(source_type, source_type)
 
+            # 🔧 重要修复：确保密码不为空
+            password = target_source.get('password', '')
+            if not password:
+                # 如果密码为空，尝试从其他地方获取或使用默认值
+                logger.warning(f"数据源 {source_name} 密码为空，请检查配置")
+
+            username = target_source.get('username', '')
+            if not username:
+                logger.warning(f"数据源 {source_name} 用户名为空，请检查配置")
+
             config = {
-                "type": mapped_type,  # 🔧 使用映射后的类型
+                "type": mapped_type,
                 "host": target_source.get('host', ''),
                 "port": target_source.get('port', 3306),
                 "database": target_source.get('database', ''),
-                "username": target_source.get('username', ''),
-                "password": target_source.get('password', ''),
+                "username": username,
+                "password": password,
             }
+            # 🆕 Doris特殊配置
+            if mapped_type == 'doris':
+                # Doris需要额外的HTTP端口配置
+                config['http_port'] = 8060  # FE HTTP端口
+                # Doris的查询端口通常是9030
+                if config['port'] == 3306:  # 如果是默认MySQL端口，改为Doris端口
+                    config['port'] = 9030
+            # 🔧 验证必要字段
+            required_fields = ['host', 'username', 'password']
+            missing_fields = [field for field in required_fields if not config.get(field)]
+
+            if missing_fields:
+                logger.error(f"数据源 {source_name} 缺少必要字段: {missing_fields}")
+                logger.error(f"当前配置: {config}")
+                return None
 
             logger.info(f"获取数据源配置成功: {source_name} -> {mapped_type}")
+            logger.info(
+                f"配置详情: host={config['host']}, username={config['username']}, password={'***' if config['password'] else 'EMPTY'}")
+
             return config
 
         except Exception as e:
@@ -701,20 +972,82 @@ class SmartSyncService:
     async def _execute_create_table(self, target_name: str, create_sql: str) -> Dict[str, Any]:
         """执行建表SQL"""
         try:
-            # 🔧 修复：使用位置参数调用（2个参数）
+            logger.info(f"开始执行建表SQL，目标数据源: {target_name}")
+            logger.info(f"建表SQL: {create_sql}")
+
+            # 执行建表SQL
             result = await self.integration_service.execute_query(
-                target_name,  # source_name
-                create_sql  # query
+                source_name=target_name,
+                query=create_sql,
+                database=None,
+                schema=None,
+                limit=None
             )
-            return {
-                "success": result.get('success', False),
-                "message": "表创建成功" if result.get('success') else result.get('error', '创建失败')
-            }
+
+            logger.info(f"建表SQL执行结果: {result}")
+
+            if result.get('success'):
+                logger.info("建表SQL执行成功，等待验证表是否存在...")
+                import asyncio
+                await asyncio.sleep(2)
+
+                # 提取表名
+                if 'CREATE TABLE IF NOT EXISTS `' in create_sql:
+                    table_name = create_sql.split('`')[1]
+                elif 'CREATE TABLE IF NOT EXISTS "' in create_sql:
+                    table_name = create_sql.split('"')[1]
+                else:
+                    # 其他情况的表名提取
+                    parts = create_sql.split()
+                    table_name = parts[5] if len(parts) > 5 else "unknown"
+
+                logger.info(f"提取的表名: {table_name}")
+
+                # 验证表是否真的存在
+                verify_sql = f"SELECT 1 FROM `{table_name}` WHERE 1=2"
+                verify_result = await self.integration_service.execute_query(
+                    source_name=target_name,
+                    query=verify_sql,
+                    database=None,
+                    schema=None,
+                    limit=1
+                )
+
+                logger.info(f"表存在验证结果: {verify_result}")
+
+                if verify_result.get('success'):
+                    logger.info(f"表 {table_name} 创建并验证成功")
+                    return {
+                        "success": True,
+                        "message": f"表 {table_name} 创建成功并验证通过",
+                        "sql": create_sql,
+                        "table_name": table_name
+                    }
+                else:
+                    logger.error(f"表 {table_name} 创建后验证失败: {verify_result.get('error')}")
+                    return {
+                        "success": False,
+                        "message": f"表创建后验证失败: {verify_result.get('error')}",
+                        "sql": create_sql,
+                        "table_name": table_name
+                    }
+            else:
+                error_msg = result.get('error', '创建失败')
+                logger.error(f"建表SQL执行失败: {error_msg}")
+                return {
+                    "success": False,
+                    "message": f"建表失败: {error_msg}",
+                    "sql": create_sql
+                }
+
         except Exception as e:
-            logger.error(f"建表失败: {e}")
+            logger.error(f"建表过程异常: {e}")
+            import traceback
+            logger.error(f"异常详情: {traceback.format_exc()}")
             return {
                 "success": False,
-                "message": f"建表失败: {str(e)}"
+                "message": f"建表异常: {str(e)}",
+                "sql": create_sql
             }
 
     async def _generate_sync_strategy(self, source_config: Dict[str, Any],
@@ -793,7 +1126,6 @@ class SmartSyncService:
             "success_rate": f"{(successful_tables / total_tables * 100):.1f}%" if total_tables > 0 else "0%",
             "summary_message": f"共{total_tables}张表，成功{successful_tables}张，失败{failed_tables}张"
         }
-
 
 
 # 全局智能同步服务实例

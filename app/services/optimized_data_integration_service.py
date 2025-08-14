@@ -126,7 +126,18 @@ class OptimizedDataIntegrationService:
                 query = f"{query} LIMIT {limit}"
 
             start_time = datetime.now()
-            results = await client.execute_query(query, database, schema)
+            import inspect
+
+            # 检查客户端的execute_query方法支持哪些参数
+            sig = inspect.signature(client.execute_query)
+            params = list(sig.parameters.keys())
+
+            if 'schema' in params:
+                # 支持schema参数的客户端（如Hive, PostgreSQL等）
+                results = await client.execute_query(query, database, schema)
+            else:
+                # 不支持schema参数的客户端（如MySQL等）
+                results = await client.execute_query(query, database)
             end_time = datetime.now()
 
             return {
@@ -1453,7 +1464,7 @@ class OptimizedDataIntegrationService:
 
                 source_info = {
                     "name": name,
-                    "type": db_type,  # 🔧 使用修复后的类型
+                    "type": db_type,
                     "status": "connected",
                     "last_test": datetime.now(),
                     "description": getattr(client, 'description', ''),
@@ -1462,12 +1473,53 @@ class OptimizedDataIntegrationService:
 
                 # 🔧 添加更多配置信息
                 if hasattr(client, 'config'):
+                    config = client.config
                     source_info.update({
-                        "host": client.config.get('host', ''),
-                        "port": client.config.get('port', 0),
-                        "database": client.config.get('database', ''),
-                        "username": client.config.get('username', '')
+                        "host": config.get('host', ''),
+                        "port": config.get('port', 0),
+                        "database": config.get('database', ''),
+                        "username": config.get('username', ''),
+                        "password": config.get('password', '')
                     })
+                    # 🔧 调试信息：检查密码是否存在
+                    password_status = "存在" if config.get('password') else "缺失"
+                    logger.debug(f"数据源 {name} 密码状态: {password_status}")
+
+                    # 🔧 如果密码缺失，尝试从原始配置或其他源获取
+                    if not config.get('password'):
+                        logger.warning(f"数据源 {name} 的密码在客户端配置中缺失")
+
+                        # 可以尝试从数据库重新获取完整配置
+                        try:
+                            db_config = await self._get_source_config_from_db(name)
+                            if db_config and db_config.get('password'):
+                                source_info['password'] = db_config['password']
+                                logger.info(f"从数据库恢复了数据源 {name} 的密码")
+                        except Exception as e:
+                            logger.error(f"从数据库获取密码失败: {e}")
+                else:
+                    # 如果客户端没有config属性，尝试从数据库获取
+                    try:
+                        db_config = await self._get_source_config_from_db(name)
+                        if db_config:
+                            source_info.update({
+                                "host": db_config.get('host', ''),
+                                "port": db_config.get('port', 0),
+                                "database": db_config.get('database', ''),
+                                "username": db_config.get('username', ''),
+                                "password": db_config.get('password', '')
+                            })
+                            logger.info(f"从数据库获取了数据源 {name} 的完整配置")
+                    except Exception as e:
+                        logger.error(f"从数据库获取配置失败 {name}: {e}")
+                        # 设置默认值
+                        source_info.update({
+                            "host": "",
+                            "port": 0,
+                            "database": "",
+                            "username": "",
+                            "password": ""
+                        })
 
                 sources.append(source_info)
 
@@ -1483,6 +1535,31 @@ class OptimizedDataIntegrationService:
 
         return sources
 
+    async def _get_source_config_from_db(self, source_name: str) -> Optional[Dict[str, Any]]:
+        """从数据库获取数据源的完整配置"""
+        try:
+            from app.utils.database import get_async_db
+            from sqlalchemy import text
+            import json
+
+            async with get_async_db() as db:
+                result = await db.execute(
+                    text("SELECT connection_config FROM data_sources WHERE name = :name AND is_active = 1"),
+                    {"name": source_name}
+                )
+                row = result.fetchone()
+
+                if row and row.connection_config:
+                    if isinstance(row.connection_config, str):
+                        return json.loads(row.connection_config)
+                    else:
+                        return row.connection_config
+
+            return None
+
+        except Exception as e:
+            logger.error(f"从数据库获取数据源配置失败 {source_name}: {e}")
+            return None
     async def get_data_sources_list_with_limited_stats(
             self,
             table_limit: int = 1000,

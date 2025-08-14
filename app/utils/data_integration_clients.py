@@ -61,7 +61,8 @@ class DatabaseClient(ABC):
         pass
 
     @abstractmethod
-    async def execute_query(self, query: str, database: str = None) -> List[Dict[str, Any]]:
+    async def execute_query(self, query: str, database: str = None, schema: str = None, limit: int = 100) -> List[
+        Dict[str, Any]]:
         """执行查询"""
         pass
 

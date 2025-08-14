@@ -3,10 +3,13 @@ import json
 import subprocess
 import asyncio
 import os
+import traceback
 from typing import Dict, Any, Optional
 from pathlib import Path
 import tempfile
 from datetime import datetime
+
+from loguru import logger
 
 
 class DataXIntegrationService:
@@ -50,7 +53,7 @@ class DataXIntegrationService:
         target = sync_config['target']
         if target.get('type', '').lower() == 'hive':
             # 从环境配置或target配置中获取namenode信息
-            target['namenode_host'] = target.get('namenode_host', '192.142.76.242')  # 从你的.env看到的
+            target['namenode_host'] = target.get('namenode_host', '192.142.76.242')
             target['namenode_port'] = target.get('namenode_port', '8020')
 
             # 动态生成HDFS路径
@@ -95,6 +98,14 @@ class DataXIntegrationService:
         db_type = source['type'].lower()
 
         if db_type == 'mysql':
+            columns = source.get('columns', [])
+            if not columns:
+                raise ValueError("MySQL Reader缺少字段配置")
+
+            # 为MySQL构建SELECT语句
+            columns_str = ', '.join(columns)
+            select_sql = f"SELECT {columns_str} FROM {source['table']}"
+
             return {
                 "name": "mysqlreader",
                 "parameter": {
@@ -102,12 +113,38 @@ class DataXIntegrationService:
                     "password": source['password'],
                     "connection": [{
                         "jdbcUrl": [f"jdbc:mysql://{source['host']}:{source['port']}/{source['database']}"],
-                        "querySql": [source.get('query', f"SELECT * FROM {source['table']}")]
+                        "querySql": [select_sql]
+                    }]
+                }
+            }
+
+        elif db_type == 'doris':
+            columns = source.get('columns', [])
+            if not columns:
+                raise ValueError("Doris Reader缺少字段配置")
+
+            return {
+                "name": "dorisreader",
+                "parameter": {
+                    "username": source['username'],
+                    "password": source['password'],
+                    "column": columns,
+                    "splitPk": source.get('split_pk', ''),
+                    "connection": [{
+                        "table": [source['table']],
+                        "jdbcUrl": [f"jdbc:Doris://{source['host']}:{source['port']}/{source['database']}"]
                     }]
                 }
             }
 
         elif db_type == 'oracle':
+            columns = source.get('columns', [])
+            if not columns:
+                raise ValueError("Oracle Reader缺少字段配置")
+
+            columns_str = ', '.join(columns)
+            select_sql = f"SELECT {columns_str} FROM {source['table']}"
+
             return {
                 "name": "oraclereader",
                 "parameter": {
@@ -115,12 +152,19 @@ class DataXIntegrationService:
                     "password": source['password'],
                     "connection": [{
                         "jdbcUrl": [f"jdbc:oracle:thin:@{source['host']}:{source['port']}:{source['database']}"],
-                        "querySql": [source.get('query', f"SELECT * FROM {source['table']}")]
+                        "querySql": [select_sql]
                     }]
                 }
             }
 
         elif db_type == 'kingbase':
+            columns = source.get('columns', [])
+            if not columns:
+                raise ValueError("KingBase Reader缺少字段配置")
+
+            columns_str = ', '.join(columns)
+            select_sql = f"SELECT {columns_str} FROM {source['table']}"
+
             return {
                 "name": "kingbaseesreader",
                 "parameter": {
@@ -128,7 +172,27 @@ class DataXIntegrationService:
                     "password": source['password'],
                     "connection": [{
                         "jdbcUrl": [f"jdbc:kingbase8://{source['host']}:{source['port']}/{source['database']}"],
-                        "querySql": [source.get('query', f"SELECT * FROM {source['table']}")]
+                        "querySql": [select_sql]
+                    }]
+                }
+            }
+
+        elif db_type == 'postgresql':
+            columns = source.get('columns', [])
+            if not columns:
+                raise ValueError("PostgreSQL Reader缺少字段配置")
+
+            columns_str = ', '.join(columns)
+            select_sql = f"SELECT {columns_str} FROM {source['table']}"
+
+            return {
+                "name": "postgresqlreader",
+                "parameter": {
+                    "username": source['username'],
+                    "password": source['password'],
+                    "connection": [{
+                        "jdbcUrl": [f"jdbc:postgresql://{source['host']}:{source['port']}/{source['database']}"],
+                        "querySql": [select_sql]
                     }]
                 }
             }
@@ -141,26 +205,58 @@ class DataXIntegrationService:
         db_type = target['type'].lower()
 
         if db_type == 'mysql':
+            columns = target.get('columns', [])
+            if not columns:
+                raise ValueError("MySQL Writer缺少字段配置")
+
             return {
                 "name": "mysqlwriter",
                 "parameter": {
                     "writeMode": target.get('write_mode', 'insert'),
                     "username": target['username'],
                     "password": target['password'],
-                    "column": target.get('columns', ["*"]),  # 新增：字段列表
+                    "column": columns,
                     "connection": [{
                         "jdbcUrl": f"jdbc:mysql://{target['host']}:{target['port']}/{target['database']}?useUnicode=true&characterEncoding=utf8",
-                        # 修复：完整URL格式
-                        "table": [target['table']]  # 保持数组格式
+                        "table": [target['table']]
                     }],
-                    # 可选配置
-                    "preSql": target.get('pre_sql', []),  # 新增：前置SQL
-                    "postSql": target.get('post_sql', []),  # 新增：后置SQL
-                    "session": target.get('session', [])  # 新增：会话设置
+                    "preSql": target.get('pre_sql', []),
+                    "postSql": target.get('post_sql', [])
+                }
+            }
+
+        elif db_type == 'doris':
+            columns = target.get('columns', [])
+            if not columns:
+                raise ValueError("Doris Writer缺少字段配置")
+
+            return {
+                "name": "doriswriter",
+                "parameter": {
+                    "loadUrl": [f"{target['host']}:{target.get('http_port', 8060)}"],
+                    "column": columns,
+                    "username": target['username'],
+                    "password": target['password'],
+                    "postSql": target.get('post_sql', []),
+                    "preSql": target.get('pre_sql', []),
+                    "flushInterval": target.get('flush_interval', 30000),
+                    "connection": [{
+                        "jdbcUrl": f"jdbc:mysql://{target['host']}:{target['port']}/{target['database']}",
+                        "selectedDatabase": target['database'],
+                        "table": [target['table']]
+                    }],
+                    "loadProps": {
+                        "format": target.get('format', 'json'),
+                        "strip_outer_array": target.get('strip_outer_array', True)
+                    }
                 }
             }
 
         elif db_type == 'hive':
+            columns = target.get('columns', [])
+            if not columns:
+                raise ValueError("Hive Writer缺少字段配置")
+
             return {
                 "name": "hdfswriter",
                 "parameter": {
@@ -168,19 +264,43 @@ class DataXIntegrationService:
                     "fileType": "text",
                     "path": target['hdfs_path'],
                     "fileName": target.get('file_name', 'data'),
-                    "column": target.get('columns', [{"name": "*", "type": "string"}]),
+                    "column": [{"name": col, "type": "string"} for col in columns],
                     "fieldDelimiter": "\t",
                     "writeMode": "append"
                 }
             }
 
         elif db_type == 'kingbase':
+            columns = target.get('columns', [])
+            if not columns:
+                raise ValueError("KingBase Writer缺少字段配置")
+
             return {
-                "name": "kingbasewriter",
+                "name": "kingbaseeswriter",
                 "parameter": {
                     "username": target['username'],
                     "password": target['password'],
-                    "column": target.get('columns', ["*"]),
+                    "column": columns,
+                    "connection": [{
+                        "jdbcUrl": f"jdbc:kingbase8://{target['host']}:{target['port']}/{target['database']}",
+                        "table": [target['table']]
+                    }],
+                    "preSql": target.get('pre_sql', []),
+                    "postSql": target.get('post_sql', [])
+                }
+            }
+
+        elif db_type == 'postgresql':
+            columns = target.get('columns', [])
+            if not columns:
+                raise ValueError("PostgreSQL Writer缺少字段配置")
+
+            return {
+                "name": "postgresqlwriter",
+                "parameter": {
+                    "username": target['username'],
+                    "password": target['password'],
+                    "column": columns,
                     "connection": [{
                         "jdbcUrl": f"jdbc:postgresql://{target['host']}:{target['port']}/{target['database']}",
                         "table": [target['table']]
@@ -197,6 +317,40 @@ class DataXIntegrationService:
     async def _execute_datax_job(self, config_file: str, task_id: Optional[str] = None) -> Dict[str, Any]:
         """执行DataX任务"""
         try:
+            # 首先检查DataX是否存在
+            if not self.python_path.exists():
+                return {
+                    "success": False,
+                    "task_id": task_id,
+                    "error": f"DataX脚本不存在: {self.python_path}",
+                    "exit_code": -1
+                }
+
+            # 检查配置文件是否存在
+            if not os.path.exists(config_file):
+                return {
+                    "success": False,
+                    "task_id": task_id,
+                    "error": f"配置文件不存在: {config_file}",
+                    "exit_code": -1
+                }
+
+            # 读取并验证配置文件内容
+            try:
+                with open(config_file, 'r', encoding='utf-8') as f:
+                    config_content = f.read()
+                    logger.info(f"DataX配置文件内容:\n{config_content}")
+
+                    # 验证JSON格式
+                    json.loads(config_content)
+            except Exception as e:
+                return {
+                    "success": False,
+                    "task_id": task_id,
+                    "error": f"配置文件格式错误: {str(e)}",
+                    "exit_code": -1
+                }
+
             # 构建DataX执行命令
             cmd = [
                 "python3",
@@ -204,40 +358,64 @@ class DataXIntegrationService:
                 config_file
             ]
 
+            logger.info(f"执行DataX命令: {' '.join(cmd)}")
+
             # 异步执行命令
             process = await asyncio.create_subprocess_exec(
                 *cmd,
                 stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE
+                stderr=asyncio.subprocess.PIPE,
+                cwd=str(self.datax_home)  # 设置工作目录
             )
 
             stdout, stderr = await process.communicate()
 
+            # 解码输出
+            stdout_text = stdout.decode('utf-8', errors='ignore')
+            stderr_text = stderr.decode('utf-8', errors='ignore')
+
+            logger.info(f"DataX stdout: {stdout_text}")
+            logger.error(f"DataX stderr: {stderr_text}")
+            logger.info(f"DataX退出码: {process.returncode}")
+
             # 解析执行结果
             if process.returncode == 0:
                 # 解析DataX输出统计信息
-                output = stdout.decode('utf-8')
-                stats = self._parse_datax_output(output)
+                stats = self._parse_datax_output(stdout_text)
 
                 return {
                     "success": True,
                     "task_id": task_id,
                     "statistics": stats,
-                    "output": output
+                    "output": stdout_text,
+                    "stderr": stderr_text
                 }
             else:
+                # 提供更详细的错误信息
+                error_message = stderr_text or stdout_text or f"DataX执行失败，退出码: {process.returncode}"
+
                 return {
                     "success": False,
                     "task_id": task_id,
-                    "error": stderr.decode('utf-8'),
+                    "error": error_message,
+                    "stdout": stdout_text,
+                    "stderr": stderr_text,
                     "exit_code": process.returncode
                 }
 
+        except FileNotFoundError as e:
+            return {
+                "success": False,
+                "task_id": task_id,
+                "error": f"命令未找到: {str(e)}。请检查DataX是否正确安装",
+                "exit_code": -1
+            }
         except Exception as e:
             return {
                 "success": False,
                 "task_id": task_id,
-                "error": str(e)
+                "error": f"执行异常: {str(e)}",
+                "exit_code": -1
             }
 
     def _parse_datax_output(self, output: str) -> Dict[str, Any]:
@@ -280,6 +458,7 @@ class EnhancedSyncService:
     async def execute_sync_task(self, task_config: Dict[str, Any]) -> Dict[str, Any]:
         """执行数据同步任务"""
         try:
+            logger.info(f"验证同步配置: {task_config}")
             """验证同步配置"""
             required_fields = ['source', 'target', 'id']
             for field in required_fields:
@@ -302,10 +481,10 @@ class EnhancedSyncService:
                     raise ValueError("Hive目标配置缺少table字段")
             # 验证配置
             self._validate_sync_config(task_config)
-
+            logger.info("配置验证通过")
             # 根据同步类型选择执行方式
             sync_type = task_config.get('sync_type', 'full')
-
+            logger.info(f"同步类型: {sync_type}")
             if sync_type == 'incremental':
                 # 增量同步逻辑
                 return await self._execute_incremental_sync(task_config)
@@ -314,10 +493,15 @@ class EnhancedSyncService:
                 return await self._execute_full_sync(task_config)
 
         except Exception as e:
+            error_msg = f"同步任务执行失败: {str(e)}"
+            logger.error(f"{error_msg}")
+            logger.error(f"错误详情: {traceback.format_exc()}")
             return {
                 "success": False,
-                "error": str(e),
-                "task_id": task_config.get('id')
+                "error": error_msg,
+                "error_type": "sync_task_error",
+                "task_id": task_config.get('id'),
+                "traceback": traceback.format_exc()
             }
 
     async def _execute_full_sync(self, task_config: Dict[str, Any]) -> Dict[str, Any]:
