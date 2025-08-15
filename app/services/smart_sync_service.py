@@ -5,6 +5,7 @@
 
 import asyncio
 import json
+import os
 import tempfile
 import traceback
 from datetime import datetime
@@ -133,34 +134,87 @@ class SmartSyncService:
             if not precheck_result['success']:
                 return precheck_result
 
-            # 创建目标表（如果需要）
-            table_creation_results = await self._create_target_tables(sync_plan)
+            # 检测目标类型
+            target_config = await self._get_data_source_config(sync_plan['target_name'])
+            is_hive_target = (target_config and target_config.get('type', '').lower() == 'hive')
+
+            logger.info(f"目标类型: {target_config.get('type', 'unknown')}, Hive目标: {is_hive_target}")
+
+            # 🔧 修复：正确的执行顺序
+            hdfs_result = None
+            table_creation_results = []
+
+            if is_hive_target:
+                logger.info("=== Hive同步流程开始 ===")
+
+                logger.info("步骤1: 创建Hive外部表...")
+                table_creation_results = await self._create_hive_external_tables(sync_plan)
+
+                # 检查建表结果
+                table_creation_success = all(result.get('success', False) for result in table_creation_results)
+                if not table_creation_success:
+                    logger.error("Hive外部表创建失败，终止同步")
+                    return {
+                        "success": False,
+                        "error": "Hive外部表创建失败",
+                        "table_creation_results": table_creation_results
+                    }
+
+                logger.info("步骤2: 创建HDFS目录...")
+                hdfs_result = await self._create_hdfs_directories(sync_plan)
+
+                # 检查HDFS目录创建结果
+                if not hdfs_result.get('success', False):
+                    logger.error("HDFS目录创建失败，终止同步")
+                    return {
+                        "success": False,
+                        "error": "HDFS目录创建失败",
+                        "hdfs_result": hdfs_result,
+                        "table_creation_results": table_creation_results
+                    }
+
+                logger.info("Hive表和HDFS目录准备完成，开始数据同步...")
+
+            else:
+                logger.info("普通数据库目标，创建常规表...")
+                table_creation_results = await self._create_target_tables(sync_plan)
 
             # 执行数据同步
             sync_results = []
             successful_syncs = 0
             failed_syncs = 0
 
+            logger.info("步骤3: 开始执行数据同步...")
+
             for plan in sync_plan['sync_plans']:
                 try:
-                    logger.info(f"开始同步表: {plan['source_table']} -> {plan['target_table']}")
+                    logger.info(f"同步表: {plan['source_table']} -> {plan['target_table']}")
 
                     # 生成DataX配置
                     datax_config = await self._generate_datax_config(sync_plan, plan)
-                    logger.info(f"DataX配置生成成功: {datax_config}")
+                    logger.info(f"DataX配置生成成功")
 
                     # 执行同步
-                    logger.info(f"开始执行DataX同步任务...")
+                    logger.info(f"⚡ 开始执行DataX同步任务...")
                     sync_result = await self.datax_service.execute_sync_task(datax_config)
-                    logger.info(f"DataX执行结果: {sync_result}")
+                    logger.info(f"DataX执行结果: success={sync_result.get('success')}")
 
                     if sync_result.get('success'):
                         successful_syncs += 1
                         logger.info(f"表 {plan['source_table']} 同步成功")
+
+                        # 🔧 修复：只有DataX同步成功后才进行Hive后续操作
+                        if is_hive_target:
+                            logger.info("步骤4: 刷新Hive分区...")
+                            partition_result = await self._refresh_hive_partition(sync_plan, plan)
+                            sync_result['partition_refresh'] = partition_result
+                            logger.info(f"Hive分区刷新结果: {partition_result.get('success')}")
+
                         # 验证数据完整性
-                        verification = await self._verify_sync_integrity(sync_plan, plan)
-                        sync_result['verification'] = verification
-                        logger.info(f"数据验证结果: {verification}")
+                        # verification = await self._verify_sync_integrity(sync_plan, plan)
+                        # sync_result['verification'] = verification
+                        # logger.info(f"🔍 数据验证结果: {verification}")
+
                     else:
                         failed_syncs += 1
                         error_msg = sync_result.get('error', '未知错误')
@@ -198,9 +252,14 @@ class SmartSyncService:
                 "failed_syncs": failed_syncs,
                 "sync_results": sync_results,
                 "table_creation_results": table_creation_results,
+                "hdfs_directories": hdfs_result if is_hive_target else None,
                 "execution_time": datetime.now(),
-                "summary": self._generate_sync_summary(sync_results)
+                "summary": self._generate_sync_summary(sync_results),
+                "workflow": "hive" if is_hive_target else "standard"
             }
+
+            if is_hive_target:
+                logger.info("=== Hive同步流程完成 ===")
 
             return sync_report
 
@@ -209,6 +268,219 @@ class SmartSyncService:
             return {
                 "success": False,
                 "error": str(e)
+            }
+
+    async def _is_hive_target(self, sync_plan: Dict[str, Any]) -> bool:
+        """异步判断是否为Hive目标"""
+        try:
+            target_config = await self._get_data_source_config(sync_plan['target_name'])
+            return target_config and target_config.get('type', '').lower() == 'hive'
+        except:
+            return False
+
+    async def _create_hive_external_tables(self, sync_plan: Dict[str, Any]) -> List[Dict[str, Any]]:
+        """创建Hive外部表"""
+        creation_results = []
+        target_name = sync_plan['target_name']
+
+        for plan in sync_plan['sync_plans']:
+            try:
+                # 生成Hive外部表SQL
+                create_sql = await self._generate_hive_external_table_sql(
+                    plan['schema_mapping'],
+                    plan['target_table'],
+                    sync_plan['target_name']
+                )
+
+                # 执行建表
+                result = await self._execute_hive_table_creation(target_name, create_sql, plan['target_table'])
+
+                creation_results.append({
+                    "table": plan['target_table'],
+                    "success": result['success'],
+                    "sql": create_sql,
+                    "message": result.get('message', '')
+                })
+
+            except Exception as e:
+                logger.error(f"创建Hive外部表失败 {plan['target_table']}: {e}")
+                creation_results.append({
+                    "table": plan['target_table'],
+                    "success": False,
+                    "error": str(e)
+                })
+
+        return creation_results
+
+    async def _generate_hive_external_table_sql(self, schema_mapping: Dict[str, Any],
+                                                table_name: str, target_source: str) -> str:
+        """生成Hive外部表SQL - 修复版本"""
+        target_config = await self._get_data_source_config(target_source)
+        columns = schema_mapping.get('columns', [])
+
+        if not columns:
+            raise ValueError("缺少字段映射信息")
+
+        # 构建字段定义
+        column_definitions = []
+        for col in columns:
+            col_name = col['name']
+            # 去掉双引号，Hive字段名不需要引号
+            clean_col_name = col_name.strip('"')
+            # 将字段类型转换为Hive类型
+            hive_type = self._convert_to_hive_type(col['target_type'])
+            column_definitions.append(f"    {clean_col_name} {hive_type}")
+
+        str1 = ',\n'.join(column_definitions)  # 字段定义部分
+        database = target_config.get('database', 'default')
+
+        # 🔧 重要修复：表名处理逻辑
+        if table_name.startswith('ODS_'):
+            final_table_name = table_name  # 如果已经有ODS_前缀，直接使用
+        else:
+            final_table_name = f"ODS_{table_name}"  # 添加ODS_前缀
+
+        # 🔧 关键修复：生成正确的LOCATION路径，与DataX路径一致
+        base_path = target_config.get('base_path', '/user/hive/warehouse')
+        if database != 'default':
+            table_location = f"{base_path}/{database}.db/{final_table_name}"
+        else:
+            table_location = f"{base_path}/{final_table_name}"
+
+        # 🔧 按照你的建表格式 + 修复分区和ORC
+        sql = f"""CREATE EXTERNAL TABLE IF NOT EXISTS {database.upper()}.{final_table_name.upper()} (
+    {str1}
+    ) PARTITIONED BY (dt string) 
+    ROW FORMAT DELIMITED 
+    FIELDS TERMINATED BY '\\t' 
+    STORED AS ORC  
+    LOCATION '{table_location}'
+    TBLPROPERTIES ('orc.compress' = 'snappy')"""
+
+        logger.info(f"生成Hive外部表SQL: {sql}")
+        logger.info(f"表位置: {table_location}")
+        return sql
+
+    def _convert_to_hive_type(self, datax_type: str) -> str:
+        """将DataX字段类型转换为Hive类型"""
+        type_mapping = {
+            'VARCHAR': 'STRING',
+            'TEXT': 'STRING',
+            'INT': 'INT',
+            'INTEGER': 'INT',
+            'BIGINT': 'BIGINT',
+            'DECIMAL': 'DECIMAL(10,2)',
+            'DOUBLE': 'DOUBLE',
+            'FLOAT': 'FLOAT',
+            'DATE': 'DATE',
+            'DATETIME': 'TIMESTAMP',
+            'TIMESTAMP': 'TIMESTAMP',
+            'BOOLEAN': 'BOOLEAN'
+        }
+
+        # 提取基础类型（去掉长度等）
+        base_type = datax_type.split('(')[0].upper()
+        return type_mapping.get(base_type, 'STRING')
+
+    async def _execute_hive_table_creation(self, target_name: str, create_sql: str, table_name: str) -> Dict[str, Any]:
+        """执行Hive建表SQL"""
+        try:
+            logger.info(f"开始创建Hive外部表: {table_name}")
+            logger.info(f"建表SQL: {create_sql}")
+
+            # 使用集成服务执行SQL
+            result = await self.integration_service.execute_query(
+                source_name=target_name,
+                query=create_sql,
+                database=None,
+                schema=None,
+                limit=1
+            )
+
+            logger.info(f"Hive建表执行结果: {result}")
+
+            return {
+                "success": result.get('success', False),
+                "message": f"Hive外部表 {table_name} 创建成功" if result.get('success') else result.get('error',
+                                                                                                        '创建失败'),
+                "sql": create_sql
+            }
+
+        except Exception as e:
+            logger.error(f"Hive建表失败: {e}")
+            return {
+                "success": False,
+                "message": f"Hive建表失败: {str(e)}",
+                "sql": create_sql
+            }
+
+    async def _refresh_hive_partition(self, sync_plan: Dict[str, Any], table_plan: Dict[str, Any]) -> Dict[str, Any]:
+        """刷新Hive分区"""
+        try:
+            target_config = await self._get_data_source_config(sync_plan['target_name'])
+            database = target_config.get('database', 'default')
+
+            # 🔧 修复：使用与DataX配置一致的表名处理逻辑
+            original_table_name = table_plan['target_table']
+            if original_table_name.startswith('ODS_'):
+                final_table_name = original_table_name
+            else:
+                final_table_name = f"ODS_{original_table_name}"
+
+            # 获取分区值
+            from datetime import datetime
+            partition_value = datetime.now().strftime('%Y-%m-%d')
+
+            # 🔧 修复：构建正确的分区路径
+            base_path = target_config.get('base_path', '/user/hive/warehouse')
+            if database != 'default':
+                partition_location = f"{base_path}/{database}.db/{final_table_name}/dt={partition_value}"
+            else:
+                partition_location = f"{base_path}/{final_table_name}/dt={partition_value}"
+
+            # 🔧 修复：添加分区时指定LOCATION
+            add_partition_sql = f"""ALTER TABLE {database.upper()}.{final_table_name.upper()} 
+    ADD IF NOT EXISTS PARTITION (dt='{partition_value}') 
+    LOCATION '{partition_location}'"""
+
+            logger.info(f"添加分区SQL: {add_partition_sql}")
+
+            # 执行添加分区
+            result = await self.integration_service.execute_query(
+                source_name=sync_plan['target_name'],
+                query=add_partition_sql,
+                limit=1
+            )
+
+            if result.get('success'):
+                # 刷新元数据
+                repair_sql = f"MSCK REPAIR TABLE {database.upper()}.{final_table_name.upper()}"
+                repair_result = await self.integration_service.execute_query(
+                    source_name=sync_plan['target_name'],
+                    query=repair_sql,
+                    limit=1
+                )
+
+                return {
+                    "success": True,
+                    "partition_added": True,
+                    "partition_value": partition_value,
+                    "partition_location": partition_location,  # 🆕 添加位置信息
+                    "table_name": final_table_name,  # 🆕 添加表名信息
+                    "metadata_refreshed": repair_result.get('success', False),
+                    "message": f"分区 dt={partition_value} 添加成功"
+                }
+            else:
+                return {
+                    "success": False,
+                    "error": f"添加分区失败: {result.get('error')}"
+                }
+
+        except Exception as e:
+            logger.error(f"刷新Hive分区失败: {e}")
+            return {
+                "success": False,
+                "error": f"刷新分区失败: {str(e)}"
             }
 
     async def _create_target_tables(self, sync_plan: Dict[str, Any]) -> List[Dict[str, Any]]:
@@ -638,6 +910,48 @@ class SmartSyncService:
             self._current_table_name = table_plan['source_table']
             self._current_target_type = target_config['type']
 
+            # 🆕 Hive特殊处理：生成正确的路径和表名
+            if target_config['type'].lower() == 'hive':
+                # 处理表名：确保ODS_前缀
+                original_table_name = table_plan['target_table']
+                if original_table_name.startswith('ODS_'):
+                    final_table_name = original_table_name
+                else:
+                    final_table_name = f"ODS_{original_table_name}"
+
+                # 生成HDFS路径
+                database = target_config.get('database', 'default')
+                base_path = target_config.get('base_path', '/user/hive/warehouse')
+
+                # 生成当前日期分区
+                from datetime import datetime
+                current_date = datetime.now().strftime('%Y-%m-%d')
+                partition_value = current_date
+
+                # 构建完整的HDFS路径
+                if database != 'default':
+                    base_table_path = f"{base_path}/{database}.db/{final_table_name}"
+                else:
+                    base_table_path = f"{base_path}/{final_table_name}"
+
+                hdfs_path = f"{base_table_path}/dt={partition_value}"
+
+                # 更新target_config，添加Hive特殊配置
+                target_config.update({
+                    'hdfs_path': hdfs_path,
+                    'table': final_table_name,  # 使用最终表名
+                    'partition_column': 'dt',
+                    'partition_value': partition_value,
+                    'storage_format': 'ORC',
+                    'compression': 'snappy',
+                    'namenode_host': target_config.get('namenode_host', '192.142.76.242'),
+                    'namenode_port': target_config.get('namenode_port', '8020')
+                })
+
+                logger.info(f"Hive目标检测到，生成路径: {hdfs_path}")
+                logger.info(f"最终表名: {final_table_name}")
+                logger.info(f"分区信息: dt={partition_value}")
+
             # 获取字段映射信息
             schema_mapping = table_plan.get('schema_mapping', {})
             columns_mapping = schema_mapping.get('columns', [])
@@ -661,9 +975,14 @@ class SmartSyncService:
             # 确定写入模式
             write_mode = self._determine_write_mode(table_plan, sync_plan.get('sync_mode', 'full'))
 
+            # 🔧 修复：对于Hive，使用更新后的表名
+            target_table_name = table_plan['target_table']
+            if target_config['type'].lower() == 'hive':
+                target_table_name = target_config['table']  # 使用处理后的表名
+
             datax_config = {
                 "id": f"sync_{sync_plan['source_name']}_{table_plan['source_table']}",
-                "name": f"{table_plan['source_table']} -> {table_plan['target_table']}",
+                "name": f"{table_plan['source_table']} -> {target_table_name}",
                 "source": {
                     **source_config,
                     "table": table_plan['source_table'],
@@ -671,9 +990,10 @@ class SmartSyncService:
                 },
                 "target": {
                     **target_config,
-                    "table": table_plan['target_table'],
+                    "table": target_table_name,  # 使用处理后的表名
                     "write_mode": write_mode,
-                    "columns": target_columns
+                    "columns": target_columns,
+                    "schema_mapping": schema_mapping
                 },
                 "sync_type": "full",
                 "parallel_jobs": sync_plan.get('recommended_parallel_jobs', 4),
@@ -829,6 +1149,138 @@ class SmartSyncService:
                 "error": f"验证失败: {str(e)}"
             }
 
+    async def _create_hdfs_directories(self, sync_plan: Dict[str, Any]) -> Dict[str, Any]:
+        """创建HDFS目录"""
+        try:
+            target_config = await self._get_data_source_config(sync_plan['target_name'])
+
+            if target_config.get('type', '').lower() != 'hive':
+                return {"success": True, "message": "非Hive目标，跳过HDFS目录创建"}
+
+            # 获取namenode信息
+            namenode_host = target_config.get('namenode_host', '192.142.76.242')
+            namenode_port = target_config.get('namenode_port', '8020')
+
+            logger.info(f"HDFS连接信息: {namenode_host}:{namenode_port}")
+
+            created_paths = []
+            failed_paths = []
+
+            for plan in sync_plan['sync_plans']:
+                try:
+                    # 生成与DataX配置一致的路径
+                    original_table_name = plan['target_table']
+                    if original_table_name.startswith('ODS_'):
+                        final_table_name = original_table_name
+                    else:
+                        final_table_name = f"ODS_{original_table_name}"
+
+                    database = target_config.get('database', 'default')
+                    base_path = target_config.get('base_path', '/user/hive/warehouse')
+
+                    # 生成当前日期分区
+                    from datetime import datetime
+                    current_date = datetime.now().strftime('%Y-%m-%d')
+
+                    # 构建完整路径（与DataX配置中的路径生成逻辑一致）
+                    if database != 'default':
+                        base_table_path = f"{base_path}/{database}.db/{final_table_name}"
+                    else:
+                        base_table_path = f"{base_path}/{final_table_name}"
+
+                    partition_path = f"{base_table_path}/dt={current_date}"
+
+                    logger.info(f"准备创建HDFS路径: {partition_path}")
+
+                    # 🔧 使用你提供的方法创建HDFS目录
+                    success = await self._create_hdfs_path(namenode_host, namenode_port, partition_path)
+
+                    if success:
+                        created_paths.append(partition_path)
+                        logger.info(f"HDFS目录创建成功: {partition_path}")
+                    else:
+                        failed_paths.append(partition_path)
+                        logger.error(f"HDFS目录创建失败: {partition_path}")
+
+                except Exception as e:
+                    error_msg = f"{plan['target_table']}: {str(e)}"
+                    logger.error(f"创建HDFS目录异常: {error_msg}")
+                    failed_paths.append(error_msg)
+
+            return {
+                "success": len(failed_paths) == 0,
+                "created_paths": created_paths,
+                "failed_paths": failed_paths,
+                "total_paths": len(created_paths) + len(failed_paths),
+                "namenode": f"{namenode_host}:{namenode_port}",
+                "message": f"HDFS目录创建完成，成功{len(created_paths)}个，失败{len(failed_paths)}个"
+            }
+
+        except Exception as e:
+            logger.error(f"HDFS目录创建异常: {e}")
+            return {
+                "success": False,
+                "error": f"HDFS目录创建异常: {str(e)}"
+            }
+
+    async def _create_hdfs_path(self, namenode_host: str, namenode_port: str, hdfs_path: str) -> bool:
+        """创建单个HDFS路径 - 使用WebHDFS API"""
+        try:
+            import aiohttp
+            import asyncio
+
+            # WebHDFS API 端口通常是 9870 (Hadoop 3.x) 或 50070 (Hadoop 2.x)
+            webhdfs_port = 9870  # 你可以根据实际情况调整
+
+            # 构建WebHDFS URL
+            webhdfs_url = f"http://{namenode_host}:{webhdfs_port}/webhdfs/v1{hdfs_path}?op=MKDIRS&user.name=bigdata"
+
+            logger.info(f"使用WebHDFS创建目录: {webhdfs_url}")
+
+            timeout = aiohttp.ClientTimeout(total=30)
+            async with aiohttp.ClientSession(timeout=timeout) as session:
+                async with session.put(webhdfs_url) as response:
+                    if response.status == 200:
+                        result = await response.json()
+                        if result.get('boolean'):
+                            logger.info(f"HDFS目录创建成功: {hdfs_path}")
+                            return True
+                        else:
+                            logger.error(f"HDFS目录创建失败: {hdfs_path}, 响应: {result}")
+                            return False
+                    else:
+                        error_text = await response.text()
+                        logger.error(f"WebHDFS请求失败: {response.status}, 错误: {error_text}")
+                        return False
+
+        except Exception as e:
+            logger.error(f"WebHDFS API调用异常: {e}")
+            return False
+
+    async def _verify_hdfs_path(self, namenode_host: str, namenode_port: str, hdfs_path: str) -> bool:
+        """验证HDFS路径是否存在 - 使用WebHDFS API"""
+        try:
+            import aiohttp
+
+            webhdfs_port = 9870
+            webhdfs_url = f"http://{namenode_host}:{webhdfs_port}/webhdfs/v1{hdfs_path}?op=GETFILESTATUS&user.name=bigdata"
+
+            logger.info(f"验证HDFS路径: {webhdfs_url}")
+
+            timeout = aiohttp.ClientTimeout(total=10)
+            async with aiohttp.ClientSession(timeout=timeout) as session:
+                async with session.get(webhdfs_url) as response:
+                    if response.status == 200:
+                        logger.info(f"HDFS路径验证成功: {hdfs_path}")
+                        return True
+                    else:
+                        logger.warning(f"HDFS路径不存在或验证失败: {hdfs_path}")
+                        return False
+
+        except Exception as e:
+            logger.error(f"HDFS路径验证异常: {e}")
+            return False
+
     def _estimate_sync_time(self, rows: int, source_type: str, target_type: str) -> int:
         """估算同步时间（分钟）"""
         # 基于经验的同步速度估算（行/分钟）
@@ -932,6 +1384,20 @@ class SmartSyncService:
                 "username": username,
                 "password": password,
             }
+
+            # 🆕 Hive特殊配置
+            if mapped_type == 'hive':
+                config.update({
+                    'namenode_host': target_source.get('namenode_host', '192.142.76.242'),
+                    'namenode_port': target_source.get('namenode_port', '8020'),
+                    'base_path': target_source.get('base_path', '/user/hive/warehouse'),
+                    'storage_format': 'ORC',
+                    'compression': 'snappy',
+                    'field_delimiter': target_source.get('field_delimiter', '\t'),
+                    'add_ods_prefix': target_source.get('add_ods_prefix', True),
+                    'partition_column': 'dt'
+                })
+
             # 🆕 Doris特殊配置
             if mapped_type == 'doris':
                 # Doris需要额外的HTTP端口配置

@@ -4,7 +4,7 @@ import subprocess
 import asyncio
 import os
 import traceback
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, List
 from pathlib import Path
 import tempfile
 from datetime import datetime
@@ -46,27 +46,43 @@ class DataXIntegrationService:
             }
 
     def _generate_datax_config(self, sync_config: Dict[str, Any]) -> Dict[str, Any]:
-
-
         """生成DataX配置"""
         source = sync_config['source']
         target = sync_config['target']
+
         if target.get('type', '').lower() == 'hive':
             # 从环境配置或target配置中获取namenode信息
             target['namenode_host'] = target.get('namenode_host', '192.142.76.242')
             target['namenode_port'] = target.get('namenode_port', '8020')
 
-            # 动态生成HDFS路径
+            # 🔧 修复：动态生成正确的HDFS路径，包含数据库名和分区
             database = target.get('database', 'default')
             table_name = target['table']
             base_path = target.get('base_path', '/user/hive/warehouse')
 
-            # 生成完整的HDFS路径
-            target['hdfs_path'] = f"{base_path}/{database}.db/{table_name}"
+            # 生成当前日期分区
+            from datetime import datetime
+            current_date = datetime.now().strftime('%Y-%m-%d')
+            partition_value = target.get('partition_value', current_date)
+
+            # 生成完整的HDFS路径，包含分区
+            if database and database != 'default':
+                target['hdfs_path'] = f"{base_path}/{database}.db/{table_name}/dt={partition_value}"
+            else:
+                target['hdfs_path'] = f"{base_path}/{table_name}/dt={partition_value}"
 
             # 设置默认文件名
             if 'file_name' not in target:
                 target['file_name'] = f"{table_name}_data"
+
+            # 🆕 新增：Hive相关配置
+            target['partition_column'] = 'dt'
+            target['partition_value'] = partition_value
+            target['storage_format'] = 'ORC'
+            target['compression'] = 'snappy'
+
+            logger.info(f"生成Hive HDFS路径: {target['hdfs_path']}")
+            logger.info(f"分区信息: dt={partition_value}")
 
         # 根据数据源类型生成reader配置
         reader_config = self._get_reader_config(source)
@@ -132,8 +148,33 @@ class DataXIntegrationService:
                     "splitPk": source.get('split_pk', ''),
                     "connection": [{
                         "table": [source['table']],
-                        "jdbcUrl": [f"jdbc:Doris://{source['host']}:{source['port']}/{source['database']}"]
+                        "jdbcUrl": [f"jdbc:mysql://{source['host']}:{source['port']}/{source['database']}"]
                     }]
+                }
+            }
+        elif db_type == 'hive':
+            columns = source.get('columns', [])
+            schema_mapping = source.get('schema_mapping', {})
+            column_info = schema_mapping.get('columns', [])
+
+            if not columns:
+                raise ValueError("Hive Reader缺少字段配置")
+
+            # 🔧 生成HDFS路径
+            hdfs_path = self._generate_hive_read_path(source)
+
+            # 🔧 生成字段配置
+            column_config = self._generate_hdfs_column_config(column_info, columns)
+
+            return {
+                "name": "hdfsreader",
+                "parameter": {
+                    "path": hdfs_path,
+                    "defaultFS": f"hdfs://{source['namenode_host']}:{source['namenode_port']}",
+                    "column": column_config,
+                    "fileType": source.get('file_type', 'orc'),  # 支持orc, text等
+                    "encoding": "UTF-8",
+                    "fieldDelimiter": source.get('field_delimiter', '\t')  # 分隔符
                 }
             }
 
@@ -200,6 +241,87 @@ class DataXIntegrationService:
         else:
             raise ValueError(f"不支持的数据源类型: {db_type}")
 
+    def _generate_hive_read_path(self, source: Dict[str, Any]) -> str:
+        """生成Hive读取路径"""
+        database = source.get('database', 'default')
+        table_name = source['table']
+        base_path = source.get('base_path', '/user/hive/warehouse')
+
+        # 处理表名：确保ODS_前缀（如果需要）
+        if not table_name.startswith('ODS_') and source.get('add_ods_prefix', False):
+            final_table_name = f"ODS_{table_name}"
+        else:
+            final_table_name = table_name
+
+        # 构建基础路径
+        if database != 'default':
+            base_table_path = f"{base_path}/{database}.db/{final_table_name}"
+        else:
+            base_table_path = f"{base_path}/{final_table_name}"
+
+        # 处理分区
+        partition_filter = source.get('partition_filter')
+        if partition_filter:
+            # 指定分区：/user/hive/warehouse/db.db/table/dt=2025-08-15/*
+            hdfs_path = f"{base_table_path}/{partition_filter}/*"
+        else:
+            # 读取所有分区：/user/hive/warehouse/db.db/table/*
+            hdfs_path = f"{base_table_path}/*"
+
+        logger.info(f"生成Hive读取路径: {hdfs_path}")
+        return hdfs_path
+
+    def _generate_hdfs_column_config(self, column_info: List[Dict], column_names: List[str]) -> List[Dict]:
+        """生成HDFS Reader的字段配置"""
+        column_config = []
+
+        if column_info:
+            # 如果有详细的字段信息，使用类型映射
+            for i, col in enumerate(column_info):
+                col_name = col.get('name', f'column_{i}')
+                col_type = col.get('target_type', 'STRING')
+
+                # 转换为hdfsreader支持的类型
+                hdfs_type = self._convert_to_hdfs_reader_type(col_type)
+
+                column_config.append({
+                    "index": i,
+                    "type": hdfs_type
+                })
+        else:
+            # 如果只有字段名，默认都是string类型
+            for i, col_name in enumerate(column_names):
+                column_config.append({
+                    "index": i,
+                    "type": "string"
+                })
+
+        logger.info(f"生成HDFS字段配置: {len(column_config)}个字段")
+        return column_config
+
+    def _convert_to_hdfs_reader_type(self, hive_type: str) -> str:
+        """将Hive类型转换为HDFS Reader支持的类型"""
+        base_type = hive_type.split('(')[0].upper()
+
+        type_mapping = {
+            'STRING': 'string',
+            'VARCHAR': 'string',
+            'TEXT': 'string',
+            'INT': 'long',
+            'INTEGER': 'long',
+            'BIGINT': 'long',
+            'SMALLINT': 'long',
+            'TINYINT': 'long',
+            'DECIMAL': 'double',
+            'DOUBLE': 'double',
+            'FLOAT': 'double',
+            'BOOLEAN': 'boolean',
+            'DATE': 'date',
+            'TIMESTAMP': 'date',
+            'DATETIME': 'date'
+        }
+
+        return type_mapping.get(base_type, 'string')
     def _get_writer_config(self, target: Dict[str, Any]) -> Dict[str, Any]:
         """根据目标类型生成writer配置"""
         db_type = target['type'].lower()
@@ -261,14 +383,21 @@ class DataXIntegrationService:
                 "name": "hdfswriter",
                 "parameter": {
                     "defaultFS": f"hdfs://{target['namenode_host']}:{target['namenode_port']}",
-                    "fileType": "text",
+                    "fileType": "orc",
                     "path": target['hdfs_path'],
                     "fileName": target.get('file_name', 'data'),
                     "column": [{"name": col, "type": "string"} for col in columns],
                     "fieldDelimiter": "\t",
-                    "writeMode": "append"
+                    "writeMode": "append",
+                    "compress": target.get('compression', 'snappy'),
+                    #"orcSchema": self._generate_orc_schema(columns),
+                    # "hadoopConfig": {
+                    #     "orc.compress": target.get('compression', 'snappy'),
+                    #     "orc.create.index": "true"
+                    # }
                 }
             }
+
 
         elif db_type == 'kingbase':
             columns = target.get('columns', [])
@@ -417,6 +546,12 @@ class DataXIntegrationService:
                 "error": f"执行异常: {str(e)}",
                 "exit_code": -1
             }
+
+    def _generate_orc_schema(self, columns: List[str]) -> str:
+        """生成ORC Schema"""
+        # 简化版本，实际应该根据字段类型生成
+        orc_fields = [f"{col}:string" for col in columns]
+        return f"struct<{','.join(orc_fields)}>"
 
     def _parse_datax_output(self, output: str) -> Dict[str, Any]:
         """解析DataX输出统计信息"""
