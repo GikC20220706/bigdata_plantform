@@ -25,6 +25,17 @@ class DataXIntegrationService:
             # 生成DataX配置文件
             job_config = self._generate_datax_config(sync_config)
 
+            # 🔧 强制JSON序列化检查
+            try:
+                test_json = json.dumps(job_config, ensure_ascii=False, default=str)
+                logger.info("JSON序列化检查通过")
+            except Exception as json_error:
+                logger.error(f"JSON序列化失败: {json_error}")
+                # 输出问题配置
+                logger.error(
+                    f"问题配置keys: {list(job_config.keys()) if isinstance(job_config, dict) else type(job_config)}")
+                raise ValueError(f"配置序列化失败: {json_error}")
+
             # 创建临时配置文件
             with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False) as f:
                 json.dump(job_config, f, indent=2, ensure_ascii=False)
@@ -247,10 +258,19 @@ class DataXIntegrationService:
         table_name = source['table']
         base_path = source.get('base_path', '/user/hive/warehouse')
 
-        # 处理表名：确保ODS_前缀（如果需要）
-        if not table_name.startswith('ODS_') and source.get('add_ods_prefix', False):
-            final_table_name = f"ODS_{table_name}"
+        table_name_upper = table_name.upper()
+
+        if table_name_upper.startswith('ODS_'):
+            # 已经有ODS前缀（不管大小写），直接使用，但统一转为大写
+            final_table_name = table_name_upper
+        elif table_name.lower().startswith('ods_'):
+            # 有小写的ods前缀，转换为大写ODS_
+            final_table_name = 'ODS_' + table_name[4:]  # 去掉小写ods_，加上大写ODS_
+        elif source.get('add_ods_prefix', False):
+            # 没有前缀且需要添加，添加ODS_前缀
+            final_table_name = f"ODS_{table_name.upper()}"
         else:
+            # 不需要前缀或已有前缀，直接使用
             final_table_name = table_name
 
         # 构建基础路径
@@ -262,12 +282,12 @@ class DataXIntegrationService:
         # 处理分区
         partition_filter = source.get('partition_filter')
         if partition_filter:
-            # 指定分区：/user/hive/warehouse/db.db/table/dt=2025-08-15/*
             hdfs_path = f"{base_table_path}/{partition_filter}/*"
         else:
-            # 读取所有分区：/user/hive/warehouse/db.db/table/*
             hdfs_path = f"{base_table_path}/*"
 
+        logger.info(f"原始表名: {table_name}")
+        logger.info(f"最终表名: {final_table_name}")
         logger.info(f"生成Hive读取路径: {hdfs_path}")
         return hdfs_path
 
@@ -276,8 +296,9 @@ class DataXIntegrationService:
         column_config = []
 
         if column_info:
+            data_columns = [col for col in column_info if col.get('name', '').lower() != 'dt']
             # 如果有详细的字段信息，使用类型映射
-            for i, col in enumerate(column_info):
+            for i, col in enumerate(data_columns):
                 col_name = col.get('name', f'column_{i}')
                 col_type = col.get('target_type', 'STRING')
 
@@ -289,15 +310,17 @@ class DataXIntegrationService:
                     "type": hdfs_type
                 })
         else:
+            data_column_names = [col for col in column_names if col.lower() != 'dt']
             # 如果只有字段名，默认都是string类型
-            for i, col_name in enumerate(column_names):
+            for i, col_name in enumerate(data_column_names):
                 column_config.append({
                     "index": i,
                     "type": "string"
                 })
 
-        logger.info(f"生成HDFS字段配置: {len(column_config)}个字段")
+        logger.info(f"生成HDFS字段配置: {len(column_config)}个字段（已排除分区字段）")
         return column_config
+
 
     def _convert_to_hdfs_reader_type(self, hive_type: str) -> str:
         """将Hive类型转换为HDFS Reader支持的类型"""
