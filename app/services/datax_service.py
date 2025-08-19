@@ -37,7 +37,7 @@ class DataXIntegrationService:
                 raise ValueError(f"配置序列化失败: {json_error}")
 
             # 创建临时配置文件
-            with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False) as f:
+            with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False, encoding='utf-8') as f:
                 json.dump(job_config, f, indent=2, ensure_ascii=False)
                 config_file = f.name
 
@@ -58,6 +58,7 @@ class DataXIntegrationService:
 
     def _generate_datax_config(self, sync_config: Dict[str, Any]) -> Dict[str, Any]:
         """生成DataX配置"""
+        clean_config = self._clean_config_for_serialization(sync_config)
         source = sync_config['source']
         target = sync_config['target']
 
@@ -489,7 +490,7 @@ class DataXIntegrationService:
 
             # 读取并验证配置文件内容
             try:
-                with open(config_file, 'r', encoding='utf-8') as f:
+                with open(config_file, 'r', encoding='utf-8', errors='replace') as f:
                     config_content = f.read()
                     logger.info(f"DataX配置文件内容:\n{config_content}")
 
@@ -523,8 +524,8 @@ class DataXIntegrationService:
             stdout, stderr = await process.communicate()
 
             # 解码输出
-            stdout_text = stdout.decode('utf-8', errors='ignore')
-            stderr_text = stderr.decode('utf-8', errors='ignore')
+            stdout_text = stdout.decode('utf-8', errors='replace')
+            stderr_text = stderr.decode('utf-8', errors='replace')
 
             logger.info(f"DataX stdout: {stdout_text}")
             logger.error(f"DataX stderr: {stderr_text}")
@@ -604,6 +605,36 @@ class DataXIntegrationService:
             pass
 
         return stats
+
+    def _clean_config_for_serialization(self, config: Dict[str, Any]) -> Dict[str, Any]:
+        """清理配置中可能导致循环引用的对象"""
+        import copy
+        clean_config = {}
+
+        for key, value in config.items():
+            if isinstance(value, dict):
+                clean_config[key] = self._clean_dict(value)
+            elif isinstance(value, list):
+                clean_config[key] = [self._clean_dict(item) if isinstance(item, dict) else item for item in value]
+            else:
+                clean_config[key] = value
+
+        return clean_config
+
+    def _clean_dict(self, data: Dict[str, Any]) -> Dict[str, Any]:
+        """清理字典中的不可序列化对象"""
+        clean = {}
+        exclude_keys = {'class', 'classLoader', 'module', '__class__', '__dict__'}
+
+        for k, v in data.items():
+            if k not in exclude_keys and not callable(v):
+                try:
+                    json.dumps(v)  # 测试是否可序列化
+                    clean[k] = v
+                except (TypeError, ValueError):
+                    clean[k] = str(v)  # 转为字符串
+
+        return clean
 
 
 # 扩展现有的sync API

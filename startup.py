@@ -39,13 +39,23 @@ def check_datax_installation():
 
     # 检查DataX脚本权限
     if not os.access(datax_script, os.X_OK):
-        logger.warning(f"⚠️ DataX script not executable: {datax_script}")
+        logger.warning(f"DataX script not executable: {datax_script}")
         try:
             os.chmod(datax_script, 0o755)
             logger.info("Fixed DataX script permissions")
         except Exception as e:
             logger.error(f"Failed to fix DataX permissions: {e}")
             return False
+
+    datax_jvm_args = [
+        "-Xss2m",
+        "-Dfastjson2.parser.safeMode=true",
+        "-Dfastjson.parser.autoTypeSupport=false",
+        "-XX:+UseG1GC"
+    ]
+
+    os.environ['DATAX_JVM_ARGS'] = " ".join(datax_jvm_args)
+    logger.info(f"设置 DataX JVM 参数: {os.environ['DATAX_JVM_ARGS']}")
 
     # 检查Java环境
     try:
@@ -101,7 +111,7 @@ def setup_production_logging():
 def validate_environment():
     """Validate the production environment across platforms."""
 
-    logger.info("🔍 Validating production environment...")
+    logger.info("Validating production environment...")
     logger.info(f"Platform: {platform.system()} {platform.release()}")
     logger.info(f"Python: {sys.version}")
     logger.info(f"IS_LOCAL_DEV: {settings.IS_LOCAL_DEV}")
@@ -156,10 +166,10 @@ def validate_environment():
                 import stat
                 file_stat = os.stat(ssh_key_path)
                 if stat.filemode(file_stat.st_mode) != '-rw-------':
-                    logger.warning(f"⚠️ SSH key permissions may be too open: {ssh_key_path}")
+                    logger.warning(f"SSH key permissions may be too open: {ssh_key_path}")
                     logger.info("Consider running: chmod 600 {ssh_key_path}")
         else:
-            logger.warning(f"⚠️ SSH key not found: {ssh_key_path}")
+            logger.warning(f"SSH key not found: {ssh_key_path}")
             logger.info("Cluster monitoring may not work without SSH access")
 
         # Validate nodes configuration

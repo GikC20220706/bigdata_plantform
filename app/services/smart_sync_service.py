@@ -190,8 +190,27 @@ class SmartSyncService:
                 try:
                     logger.info(f"同步表: {plan['source_table']} -> {plan['target_table']}")
 
+                    # 🔧 彻底清理配置，防止循环引用
+                    clean_sync_plan = {
+                        'source_name': sync_plan['source_name'],
+                        'target_name': sync_plan['target_name'],
+                        'sync_mode': sync_plan.get('sync_mode', 'full'),
+                        'recommended_parallel_jobs': sync_plan.get('recommended_parallel_jobs', 4)
+                    }
+
+                    clean_plan = {
+                        'source_table': plan['source_table'],
+                        'target_table': plan['target_table'],
+                        'target_exists': plan.get('target_exists', False),
+                        'strategy': plan.get('strategy', 'full_copy')
+                        # 🔧 故意不包含 schema_mapping，避免55个字段的复杂对象
+                    }
+
+                    logger.info(
+                        f"清理后的配置 - 源表: {clean_plan['source_table']}, 目标表: {clean_plan['target_table']}")
+
                     # 生成DataX配置
-                    datax_config = await self._generate_datax_config(sync_plan, plan)
+                    datax_config = await self._generate_datax_config(clean_sync_plan, clean_plan)
                     logger.info(f"DataX配置生成成功")
 
                     # 执行同步
@@ -1624,6 +1643,38 @@ class SmartSyncService:
             "summary_message": f"共{total_tables}张表，成功{successful_tables}张，失败{failed_tables}张"
         }
 
+    def _deep_clean_config(self, config: Dict[str, Any]) -> Dict[str, Any]:
+        """深度清理配置，移除循环引用和不可序列化对象"""
+        import copy
+        import json
+
+        if not isinstance(config, dict):
+            return config
+
+        clean_config = {}
+        exclude_keys = {'__class__', '__dict__', 'class', 'classLoader', 'module'}
+
+        for key, value in config.items():
+            if key in exclude_keys or callable(value):
+                continue
+
+            try:
+                if isinstance(value, dict):
+                    clean_config[key] = self._deep_clean_config(value)
+                elif isinstance(value, list):
+                    clean_config[key] = [
+                        self._deep_clean_config(item) if isinstance(item, dict) else item
+                        for item in value
+                    ]
+                else:
+                    # 测试是否可序列化
+                    json.dumps(value)
+                    clean_config[key] = value
+            except (TypeError, ValueError, UnicodeDecodeError):
+                # 如果不能序列化，转为字符串
+                clean_config[key] = str(value) if value is not None else None
+
+        return clean_config
 
 # 全局智能同步服务实例
 smart_sync_service = SmartSyncService()
