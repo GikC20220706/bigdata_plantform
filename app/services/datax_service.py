@@ -58,9 +58,23 @@ class DataXIntegrationService:
 
     def _generate_datax_config(self, sync_config: Dict[str, Any]) -> Dict[str, Any]:
         """生成DataX配置"""
+        import copy
         clean_config = self._clean_config_for_serialization(sync_config)
-        source = sync_config['source']
-        target = sync_config['target']
+        source = copy.deepcopy(sync_config['source'])
+        target = copy.deepcopy(sync_config['target'])
+
+        keys_to_remove = ['_sa_instance_state', 'connection', 'client', 'metadata',
+                          'schema_mapping', 'column_mappings']
+
+        for key in keys_to_remove:
+            source.pop(key, None)
+            target.pop(key, None)
+
+        # 如果source是hive类型，进一步清理
+        if source.get('type', '').lower() == 'hive':
+            # 确保columns是简单的字符串列表
+            if 'columns' in source:
+                source['columns'] = [str(col) for col in source['columns']]
 
         if target.get('type', '').lower() == 'hive':
             # 从环境配置或target配置中获取namenode信息
@@ -172,11 +186,36 @@ class DataXIntegrationService:
             if not columns:
                 raise ValueError("Hive Reader缺少字段配置")
 
+            # 清理source中可能的对象引用
+            clean_source = {
+                'database': source.get('database', 'default'),
+                'table': source.get('table'),
+                'namenode_host': source.get('namenode_host', '192.142.76.242'),
+                'namenode_port': source.get('namenode_port', '8020'),
+                'base_path': source.get('base_path', '/user/hive/warehouse'),
+                'file_type': source.get('file_type', 'orc'),
+                'field_delimiter': source.get('field_delimiter', '\t'),
+                'partition_filter': source.get('partition_filter'),
+                'add_ods_prefix': source.get('add_ods_prefix', False)
+            }
+
             # 🔧 生成HDFS路径
             hdfs_path = self._generate_hive_read_path(source)
 
             # 🔧 生成字段配置
-            column_config = self._generate_hdfs_column_config(column_info, columns)
+            #column_config = self._generate_hdfs_column_config(column_info, columns)
+            column_config = []
+            for i, col in enumerate(columns):
+                if isinstance(col, str):
+                    column_config.append({
+                        "index": i,
+                        "type": "string"  # 统一使用string类型
+                    })
+                else:
+                    column_config.append({
+                        "index": i,
+                        "type": "string"
+                    })
 
             return {
                 "name": "hdfsreader",
@@ -292,36 +331,60 @@ class DataXIntegrationService:
         logger.info(f"生成Hive读取路径: {hdfs_path}")
         return hdfs_path
 
+    # def _generate_hdfs_column_config(self, column_info: List[Dict], column_names: List[str]) -> List[Dict]:
+    #     """生成HDFS Reader的字段配置"""
+    #     column_config = []
+    #
+    #     if column_info:
+    #         data_columns = [col for col in column_info if col.get('name', '').lower() != 'dt']
+    #         # 如果有详细的字段信息，使用类型映射
+    #         for i, col in enumerate(data_columns):
+    #             col_name = col.get('name', f'column_{i}')
+    #             col_type = col.get('target_type', 'STRING')
+    #
+    #             # 转换为hdfsreader支持的类型
+    #             hdfs_type = self._convert_to_hdfs_reader_type(col_type)
+    #
+    #             column_config.append({
+    #                 "index": i,
+    #                 "type": hdfs_type
+    #             })
+    #     else:
+    #         data_column_names = [col for col in column_names if col.lower() != 'dt']
+    #         # 如果只有字段名，默认都是string类型
+    #         for i, col_name in enumerate(data_column_names):
+    #             column_config.append({
+    #                 "index": i,
+    #                 "type": "string"
+    #             })
+    #
+    #     logger.info(f"生成HDFS字段配置: {len(column_config)}个字段（已排除分区字段）")
+    #     return column_config
     def _generate_hdfs_column_config(self, column_info: List[Dict], column_names: List[str]) -> List[Dict]:
         """生成HDFS Reader的字段配置"""
         column_config = []
 
+        # 确保只使用简单类型
         if column_info:
-            data_columns = [col for col in column_info if col.get('name', '').lower() != 'dt']
-            # 如果有详细的字段信息，使用类型映射
-            for i, col in enumerate(data_columns):
-                col_name = col.get('name', f'column_{i}')
-                col_type = col.get('target_type', 'STRING')
-
-                # 转换为hdfsreader支持的类型
-                hdfs_type = self._convert_to_hdfs_reader_type(col_type)
-
-                column_config.append({
-                    "index": i,
-                    "type": hdfs_type
-                })
+            for i, col in enumerate(column_info):
+                # 只提取必要的字段，避免其他对象引用
+                if isinstance(col, dict):
+                    col_name = str(col.get('name', f'column_{i}'))
+                    if col_name.lower() != 'dt':  # 排除分区字段
+                        column_config.append({
+                            "index": len(column_config),
+                            "type": "string"  # 简化类型处理
+                        })
         else:
-            data_column_names = [col for col in column_names if col.lower() != 'dt']
-            # 如果只有字段名，默认都是string类型
-            for i, col_name in enumerate(data_column_names):
-                column_config.append({
-                    "index": i,
-                    "type": "string"
-                })
+            for i, col_name in enumerate(column_names):
+                if col_name.lower() != 'dt':
+                    column_config.append({
+                        "index": len(column_config),
+                        "type": "string"
+                    })
 
-        logger.info(f"生成HDFS字段配置: {len(column_config)}个字段（已排除分区字段）")
+        logger.info(f"生成HDFS字段配置: {len(column_config)}个字段")
         return column_config
-
 
     def _convert_to_hdfs_reader_type(self, hive_type: str) -> str:
         """将Hive类型转换为HDFS Reader支持的类型"""
@@ -470,6 +533,8 @@ class DataXIntegrationService:
     async def _execute_datax_job(self, config_file: str, task_id: Optional[str] = None) -> Dict[str, Any]:
         """执行DataX任务"""
         try:
+            env = os.environ.copy()
+
             # 首先检查DataX是否存在
             if not self.python_path.exists():
                 return {
@@ -493,7 +558,6 @@ class DataXIntegrationService:
                 with open(config_file, 'r', encoding='utf-8', errors='replace') as f:
                     config_content = f.read()
                     logger.info(f"DataX配置文件内容:\n{config_content}")
-
                     # 验证JSON格式
                     json.loads(config_content)
             except Exception as e:
@@ -504,21 +568,32 @@ class DataXIntegrationService:
                     "exit_code": -1
                 }
 
-            # 构建DataX执行命令
+            # 设置JVM参数（通过环境变量）
+            jvm_opts = [
+                "-Xms1G",
+                "-Xmx4G",
+                "-XX:+UseG1GC",
+                "-Dfastjson.parser.safeMode=true",
+                "-Dfastjson2.parser.safeMode=true"
+            ]
+            env['DATAX_JVM_OPTS'] = ' '.join(jvm_opts)
+
+            # 构建DataX执行命令 - 这个必须在if块外面！
             cmd = [
-                "python3",
+                "python",
                 str(self.python_path),
                 config_file
             ]
 
             logger.info(f"执行DataX命令: {' '.join(cmd)}")
+            logger.info(f"JVM参数: {env.get('DATAX_JVM_OPTS', 'None')}")
 
             # 异步执行命令
             process = await asyncio.create_subprocess_exec(
                 *cmd,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
-                cwd=str(self.datax_home)  # 设置工作目录
+                env=env
             )
 
             stdout, stderr = await process.communicate()
@@ -528,7 +603,8 @@ class DataXIntegrationService:
             stderr_text = stderr.decode('utf-8', errors='replace')
 
             logger.info(f"DataX stdout: {stdout_text}")
-            logger.error(f"DataX stderr: {stderr_text}")
+            if stderr_text:
+                logger.error(f"DataX stderr: {stderr_text}")
             logger.info(f"DataX退出码: {process.returncode}")
 
             # 解析执行结果
@@ -547,6 +623,11 @@ class DataXIntegrationService:
                 # 提供更详细的错误信息
                 error_message = stderr_text or stdout_text or f"DataX执行失败，退出码: {process.returncode}"
 
+                # 检查是否是StackOverflowError
+                if "StackOverflowError" in error_message:
+                    logger.error("检测到StackOverflowError，这是FastJSON序列化问题")
+                    error_message = "FastJSON序列化失败（StackOverflowError），请检查Hive reader配置"
+
                 return {
                     "success": False,
                     "task_id": task_id,
@@ -564,6 +645,7 @@ class DataXIntegrationService:
                 "exit_code": -1
             }
         except Exception as e:
+            logger.error(f"执行DataX任务异常: {str(e)}")
             return {
                 "success": False,
                 "task_id": task_id,
