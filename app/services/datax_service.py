@@ -200,7 +200,7 @@ class DataXIntegrationService:
             }
 
             # 🔧 生成HDFS路径
-            hdfs_path = self._generate_hive_read_path(source)
+            hdfs_path = self._generate_hive_read_path(clean_source)
 
             # 🔧 生成字段配置
             #column_config = self._generate_hdfs_column_config(column_info, columns)
@@ -216,17 +216,26 @@ class DataXIntegrationService:
                         "index": i,
                         "type": "string"
                     })
+                # 根据文件类型设置不同的参数
+            file_type = clean_source.get('file_type', 'orc').lower()
+
+            reader_params = {
+                "path": hdfs_path,
+                "defaultFS": f"hdfs://{clean_source['namenode_host']}:{clean_source['namenode_port']}",
+                "column": column_config,
+                "fileType": file_type,
+                "encoding": "UTF-8"
+            }
+            # 根据文件类型添加特定参数
+            if file_type == 'text':
+                reader_params["fieldDelimiter"] = clean_source.get('field_delimiter', '\t')
+            elif file_type == 'orc':
+                # ORC文件不需要字段分隔符
+                pass
 
             return {
                 "name": "hdfsreader",
-                "parameter": {
-                    "path": hdfs_path,
-                    "defaultFS": f"hdfs://{source['namenode_host']}:{source['namenode_port']}",
-                    "column": column_config,
-                    "fileType": source.get('file_type', 'orc'),  # 支持orc, text等
-                    "encoding": "UTF-8",
-                    "fieldDelimiter": source.get('field_delimiter', '\t')  # 分隔符
-                }
+                "parameter": reader_params
             }
 
         elif db_type == 'oracle':
@@ -465,24 +474,28 @@ class DataXIntegrationService:
             columns = target.get('columns', [])
             if not columns:
                 raise ValueError("Hive Writer缺少字段配置")
+            file_type = target.get('file_type', 'orc').lower()
+
+            writer_params = {
+                "defaultFS": f"hdfs://{target['namenode_host']}:{target['namenode_port']}",
+                "fileType": file_type,
+                "path": target['hdfs_path'],
+                "fileName": target.get('file_name', 'data'),
+                "column": [{"name": col, "type": "string"} for col in columns],
+                "writeMode": "append",
+                "encoding": "UTF-8"
+            }
+
+            # 根据文件类型设置特定参数
+            if file_type == 'text':
+                writer_params["fieldDelimiter"] = target.get('field_delimiter', '\t')
+
+            elif file_type == 'orc':
+                writer_params["compress"] = target.get('compression', 'snappy')
 
             return {
                 "name": "hdfswriter",
-                "parameter": {
-                    "defaultFS": f"hdfs://{target['namenode_host']}:{target['namenode_port']}",
-                    "fileType": "orc",
-                    "path": target['hdfs_path'],
-                    "fileName": target.get('file_name', 'data'),
-                    "column": [{"name": col, "type": "string"} for col in columns],
-                    "fieldDelimiter": "\t",
-                    "writeMode": "append",
-                    "compress": target.get('compression', 'snappy'),
-                    #"orcSchema": self._generate_orc_schema(columns),
-                    # "hadoopConfig": {
-                    #     "orc.compress": target.get('compression', 'snappy'),
-                    #     "orc.create.index": "true"
-                    # }
-                }
+                "parameter": writer_params
             }
 
 
@@ -689,19 +702,39 @@ class DataXIntegrationService:
         return stats
 
     def _clean_config_for_serialization(self, config: Dict[str, Any]) -> Dict[str, Any]:
-        """清理配置中可能导致循环引用的对象"""
+        """清理配置对象，移除不可序列化的内容"""
         import copy
-        clean_config = {}
 
-        for key, value in config.items():
-            if isinstance(value, dict):
-                clean_config[key] = self._clean_dict(value)
-            elif isinstance(value, list):
-                clean_config[key] = [self._clean_dict(item) if isinstance(item, dict) else item for item in value]
+        def deep_clean(obj):
+            """深度清理对象"""
+            if isinstance(obj, dict):
+                cleaned = {}
+                for key, value in obj.items():
+                    # 跳过所有以下划线开头的私有属性
+                    if isinstance(key, str) and key.startswith('_'):
+                        continue
+                    # 跳过已知的问题属性
+                    if key in ['connection', 'client', 'metadata', 'schema_mapping',
+                               'column_mappings', 'engine', 'session', 'bind', 'registry']:
+                        continue
+                    # 跳过类对象和模块对象
+                    if hasattr(value, '__module__') or hasattr(value, '__class__'):
+                        if str(type(value)).startswith('<class'):
+                            continue
+                    cleaned[key] = deep_clean(value)
+                return cleaned
+            elif isinstance(obj, (list, tuple)):
+                return [deep_clean(item) for item in obj]
+            elif isinstance(obj, (str, int, float, bool)) or obj is None:
+                return obj
             else:
-                clean_config[key] = value
+                # 对于其他类型，尝试转换为字符串
+                try:
+                    return str(obj)
+                except:
+                    return None
 
-        return clean_config
+        return deep_clean(config)
 
     def _clean_dict(self, data: Dict[str, Any]) -> Dict[str, Any]:
         """清理字典中的不可序列化对象"""
