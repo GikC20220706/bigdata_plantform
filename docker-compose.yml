@@ -1,5 +1,3 @@
-version: '3.8'
-
 services:
   # MySQL数据库
   mysql:
@@ -66,6 +64,7 @@ services:
   # 主应用
   bigdata-platform:
     image: bigdata-platform:3.2.1-aarch64
+    user: "1000:1000"
     container_name: bigdata-platform
     restart: unless-stopped
     ports:
@@ -146,6 +145,21 @@ services:
       # 时区设置
       - TZ=Asia/Shanghai
 
+      # Hadoop环境变量（匹配你的服务器配置）
+      #- JAVA_HOME=/opt/jdk
+      - HADOOP_HOME=/opt/hadoop
+      - HADOOP_CONF_DIR=/etc/hadoop
+      - DATAX_HOME=/opt/datax
+      - PATH=/opt/hadoop/bin:/opt/hadoop/sbin:/opt/jdk/bin:/usr/local/bin:/usr/bin:/bin
+
+      # JVM 优化参数
+      - JAVA_OPTS=-Xss8m -Xms4g -Xmx16g -Dfastjson.parser.safeMode=true -Dfastjson2.parser.safeMode=true
+      - DATAX_JVM_OPTS=-Xss8m -Xms4g -Xmx16g -Dfastjson.parser.safeMode=true
+
+      # FastJSON 安全配置
+      #- FASTJSON_PARSER_SAFEMODE=true
+      #- FASTJSON2_PARSER_SAFEMODE=true
+      #- JVM_OPTS=-Dfastjson.parser.safeMode=true -Dfastjson2.parser.safeMode=true
     volumes:
       # 持久化数据
       - ./logs:/app/logs
@@ -165,6 +179,22 @@ services:
       # 时区数据
       - /etc/localtime:/etc/localtime:ro
 
+      # DataX相关挂载 - 移到这里
+      - ./datax/configs:/app/datax/jobs
+      - ./datax/logs:/app/datax/logs
+      - ./datax/scripts:/app/datax/scripts:ro
+      - ./datax/datax:/opt/datax:ro
+      # 使用服务器datax挂载
+      #- /opt/module/datax:/opt/datax:ro
+      # 添加以下 Hadoop 挂载
+      - /opt/module/hadoop:/opt/hadoop:ro
+      - /opt/module/hadoop/etc/hadoop:/etc/hadoop:ro
+      #- /opt/module/jdk:/opt/jdk:ro
+
+      - /etc/hosts:/etc/hosts:ro
+      # 添加离线swagger ui
+      - ./static:/app/static:ro
+
     depends_on:
       mysql:
         condition: service_healthy
@@ -182,11 +212,11 @@ services:
     deploy:
       resources:
         limits:
-          cpus: '2.0'
-          memory: 2G
+          cpus: '16.0'
+          memory: 32G
         reservations:
-          cpus: '0.5'
-          memory: 512M
+          cpus: '4.0'
+          memory: 8G
 
     networks:
       - bigdata-network
@@ -215,20 +245,37 @@ services:
     networks:
       - bigdata-network
 
-# 数据卷
+  # DataX执行引擎 - 修正镜像版本
+  datax-engine:
+    image: openjdk:11-jre-slim  # 改为Java 17
+    container_name: bigdata-datax
+    restart: unless-stopped
+    volumes:
+      - ./datax:/opt/datax:ro  # 修正路径
+      - ./datax/configs:/opt/datax/configs
+      - ./datax/logs:/opt/datax/logs
+    environment:
+      - DATAX_HOME=/opt/datax
+      - JAVA_HOME=/opt/java/openjdk  # 修正Java路径
+    networks:
+      - bigdata-network
+    command: >
+      bash -c "
+        echo 'Checking Java installation...' &&
+        java -version &&
+        echo 'Checking DataX installation...' &&
+        ls -la /opt/datax/bin/datax.py &&
+        chmod +x /opt/datax/bin/datax.py 2>/dev/null || true &&
+        echo 'DataX engine ready' &&
+        tail -f /dev/null
+      "
+
+# 数据卷 - 修正格式
 volumes:
   mysql_data:
     driver: local
-    driver_opts:
-      type: none
-      o: bind
-      device: ./data/mysql
   redis_data:
     driver: local
-    driver_opts:
-      type: none
-      o: bind
-      device: ./data/redis
 
 # 网络配置
 networks:
@@ -242,5 +289,3 @@ networks:
     driver_opts:
       com.docker.network.bridge.name: br-bigdata
       com.docker.network.driver.mtu: 1500
-
-

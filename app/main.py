@@ -34,6 +34,8 @@ sys.path.insert(0, str(project_root))
 from config.settings import settings
 from app.api.v1 import api_router
 from app.utils.response import create_error_response
+from fastapi.staticfiles import StaticFiles
+from fastapi.openapi.docs import get_swagger_ui_html
 
 
 @asynccontextmanager
@@ -44,10 +46,10 @@ async def lifespan(app: FastAPI):
     Handles startup and shutdown events for the FastAPI application.
     """
     # Startup
-    logger.info("🚀 Starting Big Data Platform API...")
-    logger.info(f"🔧 Environment: {'Development' if settings.DEBUG else 'Production'}")
-    logger.info(f"📊 Data Mode: {'Mock Data' if settings.MOCK_DATA_MODE else 'Real Data'}")
-    logger.info(f"🖥️ Cluster Integration: {'Enabled' if settings.use_real_clusters else 'Disabled'}")
+    logger.info("Starting Big Data Platform API...")
+    logger.info(f"Environment: {'Development' if settings.DEBUG else 'Production'}")
+    logger.info(f"Data Mode: {'Mock Data' if settings.MOCK_DATA_MODE else 'Real Data'}")
+    logger.info(f"Cluster Integration: {'Enabled' if settings.use_real_clusters else 'Disabled'}")
 
     # Initialize database if needed
     try:
@@ -86,15 +88,15 @@ async def lifespan(app: FastAPI):
         asyncio.create_task(warm_critical_cache())
 
     except Exception as e:
-        logger.warning(f"⚠️ Data integration service initialization failed: {e}")
+        logger.warning(f"Data integration service initialization failed: {e}")
 
     # Initialize metrics collector
     try:
         from app.utils.metrics_collector import metrics_collector
-        logger.info("✅ Metrics collector initialized")
-        logger.info(f"📊 Cache TTL: {metrics_collector.cache_ttl} seconds")
+        logger.info("Metrics collector initialized")
+        logger.info(f"Cache TTL: {metrics_collector.cache_ttl} seconds")
     except Exception as e:
-        logger.warning(f"⚠️ Metrics collector initialization failed: {e}")
+        logger.warning(f"Metrics collector initialization failed: {e}")
 
     # Test cluster connections if enabled
     if settings.use_real_clusters:
@@ -105,38 +107,37 @@ async def lifespan(app: FastAPI):
             hdfs_client = HDFSClient()
             storage_info = hdfs_client.get_storage_info()
             if storage_info.get('total_size', 0) > 0:
-                logger.info("✅ HDFS connection successful")
+                logger.info("HDFS connection successful")
             else:
-                logger.warning("⚠️ HDFS connection test failed")
+                logger.warning("HDFS connection test failed")
 
             # Test Hive connection
             hive_client = HiveClient()
             databases = hive_client.get_databases()
             if databases:
-                logger.info(f"✅ Hive connection successful ({len(databases)} databases)")
+                logger.info(f"Hive connection successful ({len(databases)} databases)")
             else:
-                logger.warning("⚠️ Hive connection test failed")
+                logger.warning("Hive connection test failed")
 
         except Exception as e:
-            logger.warning(f"⚠️ Cluster connection test failed: {e}")
+            logger.warning(f"Cluster connection test failed: {e}")
 
-    logger.info("🎉 Application startup completed successfully!")
+    logger.info("Application startup completed successfully!")
 
     yield
 
     # Shutdown
-    logger.info("🔄 Shutting down Big Data Platform API...")
+    logger.info("Shutting down Big Data Platform API...")
 
     # Clear metrics cache
     try:
         from app.utils.metrics_collector import metrics_collector
         metrics_collector.clear_cache()
-        logger.info("✅ Metrics cache cleared")
+        logger.info("Metrics cache cleared")
     except Exception as e:
-        logger.warning(f"⚠️ Failed to clear metrics cache: {e}")
+        logger.warning(f"Failed to clear metrics cache: {e}")
 
-    logger.info("👋 Application shutdown completed")
-
+    logger.info("Application shutdown completed")
 
 
 async def warm_critical_cache():
@@ -149,11 +150,11 @@ async def warm_critical_cache():
         # 预热概览数据
         service = get_optimized_data_integration_service()
         await service.get_data_sources_overview()
-        logger.info("✅ Integration overview cache warmed")
+        logger.info("Integration overview cache warmed")
 
         # 预热数据源列表
-        #await optimized_data_integration_service.get_data_sources_list()
-        #logger.info("✅ Data sources list cache warmed")
+        # await optimized_data_integration_service.get_data_sources_list()
+        # logger.info("Data sources list cache warmed")
 
     except Exception as e:
         logger.warning(f"Cache warming failed: {e}")
@@ -172,8 +173,8 @@ def create_app() -> FastAPI:
         title=settings.APP_NAME,
         version=settings.VERSION,
         description="大数据平台API - 提供集群监控、数据治理、任务管理等功能",
-        docs_url="/docs",
-        redoc_url="/redoc" ,
+        docs_url=None,  # 禁用默认docs
+        redoc_url=None,  # 禁用默认redoc
         openapi_url="/openapi.json",
         lifespan=lifespan
     )
@@ -189,6 +190,24 @@ def create_app() -> FastAPI:
 
     # Setup exception handlers
     setup_exception_handlers(app)
+
+    def custom_openapi():
+        if app.openapi_schema:
+            return app.openapi_schema
+
+        from fastapi.openapi.utils import get_openapi
+        openapi_schema = get_openapi(
+            title=app.title,
+            version=app.version,
+            description=app.description,
+            routes=app.routes,
+        )
+        # 强制修改版本号
+        openapi_schema["openapi"] = "3.0.3"
+        app.openapi_schema = openapi_schema
+        return app.openapi_schema
+
+    app.openapi = custom_openapi
 
     return app
 
@@ -223,14 +242,14 @@ def setup_middleware(app: FastAPI) -> None:
             response = await call_next(request)
             return response
 
-        logger.info(f"📥 {request.method} {request.url.path} - Client: {request.client.host}")
+        logger.info(f"{request.method} {request.url.path} - Client: {request.client.host}")
 
         try:
             response = await call_next(request)
             process_time = time.time() - start_time
 
             logger.info(
-                f"📤 {request.method} {request.url.path} - "
+                f"{request.method} {request.url.path} - "
                 f"Status: {response.status_code} - "
                 f"Time: {process_time:.3f}s"
             )
@@ -243,7 +262,7 @@ def setup_middleware(app: FastAPI) -> None:
         except Exception as e:
             process_time = time.time() - start_time
             logger.error(
-                f"❌ {request.method} {request.url.path} - "
+                f"{request.method} {request.url.path} - "
                 f"Error: {str(e)} - "
                 f"Time: {process_time:.3f}s"
             )
@@ -255,6 +274,15 @@ def setup_routers(app: FastAPI) -> None:
 
     # Include main API router
     app.include_router(api_router)
+
+    @app.get("/docs", include_in_schema=False)
+    async def custom_swagger_ui_html():
+        return get_swagger_ui_html(
+            openapi_url="/openapi.json",
+            title="Big Data Platform API Documentation",
+            swagger_js_url="/static/swagger-ui/swagger-ui-bundle.js",
+            swagger_css_url="/static/swagger-ui/swagger-ui.css"
+        )
 
     # Health check endpoint
     @app.get("/health", tags=["health"])
@@ -298,7 +326,7 @@ def setup_static_files(app: FastAPI) -> None:
             """Serve the main dashboard page."""
             return templates.TemplateResponse("index.html", {"request": request})
 
-        logger.info(f"✅ Templates loaded from {templates_dir}")
+        logger.info(f"Templates loaded from {templates_dir}")
 
 
 def setup_exception_handlers(app: FastAPI) -> None:
@@ -326,6 +354,7 @@ def setup_exception_handlers(app: FastAPI) -> None:
                 code=500
             )
         )
+
 
 # 在 app/main.py 的 setup_middleware 函数中添加性能监控中间件
 
@@ -359,7 +388,7 @@ def setup_middleware(app: FastAPI) -> None:
             response = await call_next(request)
             return response
 
-        logger.info(f"📥 {request.method} {request.url.path} - Client: {request.client.host}")
+        logger.info(f"{request.method} {request.url.path} - Client: {request.client.host}")
 
         try:
             response = await call_next(request)
@@ -370,7 +399,7 @@ def setup_middleware(app: FastAPI) -> None:
                 logger.warning(f"Slow request: {request.url.path} took {process_time * 1000:.1f}ms")
 
             logger.info(
-                f"📤 {request.method} {request.url.path} - "
+                f"{request.method} {request.url.path} - "
                 f"Status: {response.status_code} - "
                 f"Time: {process_time:.3f}s"
             )
@@ -385,18 +414,19 @@ def setup_middleware(app: FastAPI) -> None:
         except Exception as e:
             process_time = time.time() - start_time
             logger.error(
-                f"❌ {request.method} {request.url.path} - "
+                f"{request.method} {request.url.path} - "
                 f"Error: {str(e)} - "
                 f"Time: {process_time:.3f}s"
             )
             raise
+
 
 # Create the FastAPI app instance
 app = create_app()
 
 # Development server runner
 if __name__ == "__main__":
-    logger.info("🚀 Starting development server...")
+    logger.info("Starting development server...")
 
     uvicorn.run(
         "app.main:app",
