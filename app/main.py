@@ -140,6 +140,7 @@ async def lifespan(app: FastAPI):
     logger.info("Application shutdown completed")
 
 
+
 async def warm_critical_cache():
     """预热关键缓存"""
     try:
@@ -153,8 +154,8 @@ async def warm_critical_cache():
         logger.info("Integration overview cache warmed")
 
         # 预热数据源列表
-        # await optimized_data_integration_service.get_data_sources_list()
-        # logger.info("Data sources list cache warmed")
+        #await optimized_data_integration_service.get_data_sources_list()
+        #logger.info("Data sources list cache warmed")
 
     except Exception as e:
         logger.warning(f"Cache warming failed: {e}")
@@ -355,7 +356,6 @@ def setup_exception_handlers(app: FastAPI) -> None:
             )
         )
 
-
 # 在 app/main.py 的 setup_middleware 函数中添加性能监控中间件
 
 def setup_middleware(app: FastAPI) -> None:
@@ -420,13 +420,12 @@ def setup_middleware(app: FastAPI) -> None:
             )
             raise
 
-
 # Create the FastAPI app instance
 app = create_app()
 
 # Development server runner
 if __name__ == "__main__":
-    logger.info("Starting development server...")
+    logger.info("🚀 Starting development server...")
 
     uvicorn.run(
         "app.main:app",

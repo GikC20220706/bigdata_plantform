@@ -22,7 +22,8 @@ from .sync import router as sync_router
 from .optimized_integration import router as optimized_integration_router
 from .business_system import router as business_system_router #业务系统接入路由
 from .smart_sync import router as smart_sync_router
-
+from .scheduler import router as scheduler_router
+from .executor import router as executor_router
 
 # Create main API router
 api_router = APIRouter(prefix="/api/v1")
@@ -91,4 +92,21 @@ api_router.include_router(
     tags=["smart-sync"],
     responses={404: {"description": "Not found"}}
 )
+
+# 新增调度管理路由
+api_router.include_router(
+    scheduler_router,
+    prefix="/scheduler",
+    tags=["scheduler", "airflow", "dag-management"],
+    responses={404: {"description": "Not found"}}
+)
+
+# 新增执行器管理路由
+api_router.include_router(
+    executor_router,
+    prefix="/executor",
+    tags=["executor", "task-execution", "sql", "shell", "datax"],
+    responses={404: {"description": "Not found"}}
+)
+
 __all__ = ["api_router"]

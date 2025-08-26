@@ -270,6 +270,124 @@ services:
         tail -f /dev/null
       "
 
+
+
+ # Airflow Webserver
+  airflow-webserver:
+    image: apache/airflow:2.8.1
+    container_name: airflow-webserver
+    restart: unless-stopped
+    depends_on:
+      mysql:
+        condition: service_healthy
+      airflow-init:
+        condition: service_completed_successfully
+    environment:
+      AIRFLOW__CORE__EXECUTOR: LocalExecutor
+      # 使用MySQL作为后端数据库
+      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: mysql+pymysql://airflow:airflow123@mysql:3306/airflow_db?charset=utf8mb4
+      AIRFLOW__CORE__SQL_ALCHEMY_CONN: mysql+pymysql://airflow:airflow123@mysql:3306/airflow_db?charset=utf8mb4
+      AIRFLOW__CORE__FERNET_KEY: ''
+      AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: 'true'
+      AIRFLOW__CORE__LOAD_EXAMPLES: 'false'
+      AIRFLOW__API__AUTH_BACKENDS: 'airflow.api.auth.backend.basic_auth,airflow.api.auth.backend.session'
+      AIRFLOW__SCHEDULER__ENABLE_HEALTH_CHECK: 'true'
+      # 数据底座集成配置
+      BIGDATA_PLATFORM_API: http://bigdata-platform:8000
+      BIGDATA_PLATFORM_AUTH: your-auth-token
+      TZ: Asia/Shanghai
+    volumes:
+      - ./airflow/dags:/opt/airflow/dags
+      - ./airflow/logs:/opt/airflow/logs
+      - ./airflow/config:/opt/airflow/config
+      - ./airflow/plugins:/opt/airflow/plugins
+      # 共享DataX和脚本目录
+      - ./datax:/opt/datax:ro
+      - ./scripts:/opt/scripts:ro
+    ports:
+      - "8080:8080"
+    command: webserver
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+    networks:
+      - bigdata-network
+
+  # Airflow Scheduler
+  airflow-scheduler:
+    image: apache/airflow:2.8.1
+    container_name: airflow-scheduler
+    restart: unless-stopped
+    depends_on:
+      mysql:
+        condition: service_healthy
+      airflow-init:
+        condition: service_completed_successfully
+    environment:
+      AIRFLOW__CORE__EXECUTOR: LocalExecutor
+      # 使用MySQL作为后端数据库
+      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: mysql+pymysql://airflow:airflow123@mysql:3306/airflow_db?charset=utf8mb4
+      AIRFLOW__CORE__SQL_ALCHEMY_CONN: mysql+pymysql://airflow:airflow123@mysql:3306/airflow_db?charset=utf8mb4
+      AIRFLOW__CORE__FERNET_KEY: ''
+      AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: 'true'
+      AIRFLOW__CORE__LOAD_EXAMPLES: 'false'
+      AIRFLOW__SCHEDULER__ENABLE_HEALTH_CHECK: 'true'
+      # 数据底座集成配置
+      BIGDATA_PLATFORM_API: http://bigdata-platform:8000
+      TZ: Asia/Shanghai
+    volumes:
+      - ./airflow/dags:/opt/airflow/dags
+      - ./airflow/logs:/opt/airflow/logs
+      - ./airflow/config:/opt/airflow/config
+      - ./airflow/plugins:/opt/airflow/plugins
+      # 共享DataX和脚本目录
+      - ./datax:/opt/datax:ro
+      - ./scripts:/opt/scripts:ro
+    command: scheduler
+    healthcheck:
+      test: ["CMD", "airflow", "jobs", "check", "--job-type", "SchedulerJob"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+    networks:
+      - bigdata-network
+
+  # Airflow 初始化
+  airflow-init:
+    image: apache/airflow:2.8.1
+    container_name: airflow-init
+    depends_on:
+      mysql:
+        condition: service_healthy
+    environment:
+      AIRFLOW__CORE__EXECUTOR: LocalExecutor
+      # 使用MySQL作为后端数据库
+      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: mysql+pymysql://airflow:airflow123@mysql:3306/airflow_db?charset=utf8mb4
+      AIRFLOW__CORE__SQL_ALCHEMY_CONN: mysql+pymysql://airflow:airflow123@mysql:3306/airflow_db?charset=utf8mb4
+      AIRFLOW__CORE__FERNET_KEY: ''
+      AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: 'true'
+      AIRFLOW__CORE__LOAD_EXAMPLES: 'false'
+      _AIRFLOW_DB_UPGRADE: 'true'
+      _AIRFLOW_WWW_USER_CREATE: 'true'
+      _AIRFLOW_WWW_USER_USERNAME: admin
+      _AIRFLOW_WWW_USER_PASSWORD: admin
+      TZ: Asia/Shanghai
+    volumes:
+      - ./airflow/dags:/opt/airflow/dags
+      - ./airflow/logs:/opt/airflow/logs
+      - ./airflow/config:/opt/airflow/config
+    command: |
+      bash -c "
+        pip install pymysql &&
+        airflow db init &&
+        airflow users create --username admin --firstname Admin --lastname User --role Admin --email admin@example.com --password admin
+      "
+    networks:
+      - bigdata-network
 # 数据卷 - 修正格式
 volumes:
   mysql_data:
