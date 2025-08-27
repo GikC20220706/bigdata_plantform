@@ -11,8 +11,8 @@ from datetime import datetime, timedelta
 from typing import Dict, List, Optional, Any, Callable, Set
 from enum import Enum
 from dataclasses import dataclass, field
-from email.mime.text import MimeText
-from email.mime.multipart import MimeMultipart
+from email.mime.text import MIMEText
+from email.mime.multipart import MIMEMultipart
 from pathlib import Path
 import aiohttp
 import aioredis
@@ -461,13 +461,13 @@ class MonitoringService:
             config = self.notification_config["email"]
 
             # 创建邮件
-            msg = MimeMultipart()
+            msg = MIMEMultipart()
             msg['From'] = config["from_email"]
             msg['Subject'] = f"[{alert.level.value.upper()}] {alert.title}"
 
             # 邮件内容
             body = self._format_email_body(alert)
-            msg.attach(MimeText(body, 'html'))
+            msg.attach(MIMEText(body, 'html'))
 
             # 获取收件人
             recipients = self._get_alert_recipients(alert)
