@@ -272,7 +272,7 @@ class BaseExecutor(ABC):
 
         finally:
             # 清理运行记录
-            self.running_tasks.pop(task_key, None)
+            await self.running_tasks.pop(task_key, None)
 
     async def cancel_task(self, task_key: str) -> bool:
         """

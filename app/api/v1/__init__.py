@@ -24,6 +24,7 @@ from .business_system import router as business_system_router #业务系统接�
 from .smart_sync import router as smart_sync_router
 from .scheduler import router as scheduler_router
 from .executor import router as executor_router
+from .monitoring import router as monitoring_router
 
 # Create main API router
 api_router = APIRouter(prefix="/api/v1")
@@ -106,6 +107,13 @@ api_router.include_router(
     executor_router,
     prefix="/executor",
     tags=["executor", "task-execution", "sql", "shell", "datax"],
+    responses={404: {"description": "Not found"}}
+)
+
+api_router.include_router(
+    monitoring_router,
+    prefix="/monitoring",
+    tags=["monitoring", "alerts", "performance"],
     responses={404: {"description": "Not found"}}
 )
 

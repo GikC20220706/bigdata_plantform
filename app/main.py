@@ -26,6 +26,12 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from loguru import logger
 import uvicorn
+from app.services.monitoring_integration import (
+    monitoring_startup_event,
+    monitoring_shutdown_event,
+    monitoring_integration,
+    validate_monitoring_config
+)
 
 # Add project root to Python path
 project_root = Path(__file__).parent.parent
@@ -77,6 +83,23 @@ async def lifespan(app: FastAPI):
         logger.info(f"Cache levels: Memory(60s) → Redis(5m) → DB(1h)")
     except Exception as e:
         logger.warning(f"Integration cache initialization failed: {e}")
+
+    # 🆕 验证监控配置
+    try:
+        config_validation = validate_monitoring_config()
+        if config_validation["valid"]:
+            logger.info("✅ 监控配置验证通过")
+        else:
+            logger.warning(f"⚠️ 监控配置验证有问题: {config_validation['errors']}")
+    except Exception as e:
+        logger.warning(f"监控配置验证失败: {e}")
+
+    # 🆕 初始化监控告警系统
+    try:
+        await monitoring_startup_event()
+        logger.info("✅ 监控告警系统初始化完成")
+    except Exception as e:
+        logger.error(f"❌ 监控告警系统初始化失败: {e}")
 
         # 初始化优化的数据集成服务
     try:
@@ -130,6 +153,11 @@ async def lifespan(app: FastAPI):
     logger.info("Shutting down Big Data Platform API...")
 
     # Clear metrics cache
+    try:
+        await monitoring_shutdown_event()
+        logger.info("✅ 监控告警系统已关闭")
+    except Exception as e:
+        logger.error(f"❌ 监控告警系统关闭异常: {e}")
     try:
         from app.utils.metrics_collector import metrics_collector
         metrics_collector.clear_cache()
@@ -249,6 +277,29 @@ def setup_middleware(app: FastAPI) -> None:
             response = await call_next(request)
             process_time = time.time() - start_time
 
+            # Log slow requests
+            if process_time > 1.0:
+                logger.warning(f"Slow request: {request.url.path} took {process_time * 1000:.1f}ms")
+
+                # 🆕 如果监控系统已初始化，触发性能告警
+                try:
+                    if monitoring_integration.initialized and process_time > 5.0:
+                        from app.services.monitoring_service import monitoring_service, AlertType, AlertLevel
+                        await monitoring_service._trigger_alert(
+                            AlertType.PERFORMANCE_DEGRADATION,
+                            AlertLevel.MEDIUM,
+                            f"API响应缓慢: {request.url.path}",
+                            f"路径: {request.method} {request.url.path}\n响应时间: {process_time:.2f}秒",
+                            {
+                                "method": request.method,
+                                "path": str(request.url.path),
+                                "response_time": process_time,
+                                "client_ip": request.client.host if request.client else "unknown"
+                            }
+                        )
+                except Exception as monitoring_error:
+                    logger.debug(f"监控告警触发失败: {monitoring_error}")
+
             logger.info(
                 f"{request.method} {request.url.path} - "
                 f"Status: {response.status_code} - "
@@ -257,6 +308,8 @@ def setup_middleware(app: FastAPI) -> None:
 
             # Add response time header
             response.headers["X-Process-Time"] = str(process_time)
+            if "/api/v1/overview" in request.url.path:
+                response.headers["X-Cache-Version"] = "enhanced_v2"
 
             return response
 
@@ -267,6 +320,27 @@ def setup_middleware(app: FastAPI) -> None:
                 f"Error: {str(e)} - "
                 f"Time: {process_time:.3f}s"
             )
+
+            # 🆕 记录API错误到监控系统
+            try:
+                if monitoring_integration.initialized:
+                    from app.services.monitoring_service import monitoring_service, AlertType, AlertLevel
+                    await monitoring_service._trigger_alert(
+                        AlertType.SYSTEM_ERROR,
+                        AlertLevel.HIGH,
+                        f"API错误: {request.url.path}",
+                        f"路径: {request.method} {request.url.path}\n错误: {str(e)}",
+                        {
+                            "method": request.method,
+                            "path": str(request.url.path),
+                            "error_message": str(e),
+                            "process_time": process_time,
+                            "client_ip": request.client.host if request.client else "unknown"
+                        }
+                    )
+            except Exception as monitoring_error:
+                logger.debug(f"监控告警触发失败: {monitoring_error}")
+
             raise
 
 
@@ -275,6 +349,18 @@ def setup_routers(app: FastAPI) -> None:
 
     # Include main API router
     app.include_router(api_router)
+
+    # 🆕 监控告警路由
+    try:
+        from app.api.v1.monitoring import router as monitoring_router
+        app.include_router(
+            monitoring_router,
+            prefix="/api/v1/monitoring",
+            tags=["monitoring", "alerts", "performance"]
+        )
+        logger.info("监控告警路由已加载")
+    except ImportError as e:
+        logger.warning(f"监控告警路由加载失败: {e}")
 
     @app.get("/docs", include_in_schema=False)
     async def custom_swagger_ui_html():
@@ -287,16 +373,87 @@ def setup_routers(app: FastAPI) -> None:
 
     # Health check endpoint
     @app.get("/health", tags=["health"])
-    async def health_check() -> Dict[str, Any]:
-        """Health check endpoint for load balancers and monitoring."""
-        return {
-            "status": "healthy",
-            "timestamp": datetime.now(),
-            "version": settings.VERSION,
-            "environment": "development" if settings.DEBUG else "production",
-            "cluster_mode": "real" if settings.use_real_clusters else "mock"
-        }
+    async def health_check():
+        """Enhanced health check including monitoring system status."""
+        try:
+            health_status = {
+                "status": "healthy",
+                "timestamp": datetime.now(),
+                "version": settings.VERSION,
+                "environment": "development" if settings.DEBUG else "production",
+                "cluster_mode": "real" if settings.use_real_clusters else "mock",
+                "components": {
+                    "api": "healthy",
+                    "monitoring": "unknown"
+                }
+            }
 
+            #检查监控系统健康状态
+            try:
+                if monitoring_integration.initialized:
+                    monitoring_health = await monitoring_integration.monitoring_service.check_system_health()
+                    health_status["components"]["monitoring"] = monitoring_health.get("overall_status", "unknown")
+                    health_status["components"]["monitoring_details"] = monitoring_health.get("components", {})
+
+                    # 获取监控统计
+                    monitoring_stats = monitoring_integration.monitoring_service.get_monitoring_stats()
+                    health_status["monitoring_stats"] = monitoring_stats
+                else:
+                    health_status["components"]["monitoring"] = "not_initialized"
+            except Exception as e:
+                health_status["components"]["monitoring"] = f"error: {str(e)}"
+                logger.warning(f"监控健康检查失败: {e}")
+
+            # 如果监控系统不健康，整体状态也标记为警告
+            if health_status["components"]["monitoring"] not in ["healthy", "not_initialized"]:
+                health_status["status"] = "warning"
+
+            return health_status
+
+        except Exception as e:
+            logger.error(f"健康检查失败: {e}")
+            return {
+                "status": "unhealthy",
+                "error": str(e),
+                "timestamp": datetime.now()
+            }
+
+    # 🆕 监控系统专用状态端点
+    @app.get("/monitoring/status", tags=["monitoring"])
+    async def monitoring_system_status():
+        """Monitoring system dedicated status endpoint."""
+        try:
+            if not monitoring_integration.initialized:
+                return {
+                    "initialized": False,
+                    "message": "监控系统未初始化"
+                }
+
+            # 获取集成状态
+            integration_status = monitoring_integration.get_integration_status()
+
+            # 获取监控统计
+            monitoring_stats = monitoring_integration.monitoring_service.get_monitoring_stats()
+
+            # 获取配置验证状态
+            config_validation = validate_monitoring_config()
+
+            return {
+                "initialized": True,
+                "integration_status": integration_status,
+                "monitoring_stats": monitoring_stats,
+                "config_validation": config_validation,
+                "active_alerts_count": len(monitoring_integration.monitoring_service.active_alerts),
+                "alert_rules_count": len(monitoring_integration.monitoring_service.alert_rules),
+                "timestamp": datetime.now()
+            }
+
+        except Exception as e:
+            logger.error(f"获取监控状态失败: {e}")
+            return {
+                "error": str(e),
+                "timestamp": datetime.now()
+            }
     # Root endpoint
     @app.get("/", tags=["frontend"])
     async def root(request: Request):
@@ -346,8 +503,28 @@ def setup_exception_handlers(app: FastAPI) -> None:
 
     @app.exception_handler(Exception)
     async def general_exception_handler(request: Request, exc: Exception):
-        """Handle general exceptions."""
+        """Handle general exceptions with monitoring integration."""
         logger.error(f"Unhandled exception: {exc}")
+
+        # 🆕 触发系统异常告警
+        try:
+            if monitoring_integration.initialized:
+                from app.services.monitoring_service import monitoring_service, AlertType, AlertLevel
+                await monitoring_service._trigger_alert(
+                    AlertType.SYSTEM_ERROR,
+                    AlertLevel.CRITICAL,
+                    "系统异常",
+                    f"未捕获的系统异常\n路径: {request.method} {request.url.path}\n异常: {str(exc)}",
+                    {
+                        "exception_type": type(exc).__name__,
+                        "exception_message": str(exc),
+                        "request_path": str(request.url.path),
+                        "request_method": request.method
+                    }
+                )
+        except Exception as monitoring_error:
+            logger.debug(f"监控告警触发失败: {monitoring_error}")
+
         return JSONResponse(
             status_code=500,
             content=create_error_response(
@@ -357,68 +534,6 @@ def setup_exception_handlers(app: FastAPI) -> None:
         )
 
 # 在 app/main.py 的 setup_middleware 函数中添加性能监控中间件
-
-def setup_middleware(app: FastAPI) -> None:
-    """Setup middleware for the FastAPI application."""
-
-    # CORS middleware
-    app.add_middleware(
-        CORSMiddleware,
-        allow_origins=["*"] if settings.DEBUG else [
-            "http://localhost:3000",
-            "http://localhost:8080",
-            "https://yourdomain.com"
-        ],
-        allow_credentials=True,
-        allow_methods=["*"],
-        allow_headers=["*"],
-    )
-
-    # Gzip compression middleware
-    app.add_middleware(GZipMiddleware, minimum_size=1000)
-
-    # Add request logging middleware
-    @app.middleware("http")
-    async def log_requests(request: Request, call_next):
-        """Log all HTTP requests with performance tracking."""
-        start_time = time.time()
-
-        # Skip logging for health checks and static files
-        if request.url.path in ["/health", "/favicon.ico"] or request.url.path.startswith("/static"):
-            response = await call_next(request)
-            return response
-
-        logger.info(f"{request.method} {request.url.path} - Client: {request.client.host}")
-
-        try:
-            response = await call_next(request)
-            process_time = time.time() - start_time
-
-            # Log slow requests
-            if process_time > 1.0:
-                logger.warning(f"Slow request: {request.url.path} took {process_time * 1000:.1f}ms")
-
-            logger.info(
-                f"{request.method} {request.url.path} - "
-                f"Status: {response.status_code} - "
-                f"Time: {process_time:.3f}s"
-            )
-
-            # Add response time headers
-            response.headers["X-Process-Time"] = str(round(process_time * 1000, 1))
-            if "/api/v1/overview" in request.url.path:
-                response.headers["X-Cache-Version"] = "enhanced_v2"
-
-            return response
-
-        except Exception as e:
-            process_time = time.time() - start_time
-            logger.error(
-                f"{request.method} {request.url.path} - "
-                f"Error: {str(e)} - "
-                f"Time: {process_time:.3f}s"
-            )
-            raise
 
 # Create the FastAPI app instance
 app = create_app()
