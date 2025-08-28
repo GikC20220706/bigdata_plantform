@@ -16,6 +16,13 @@ from .sync_task import (
     SyncTask, SyncTableMapping, SyncExecution, SyncTableResult,
     DataSourceMetadata, SyncTemplate
 )
+# 工作流编排相关模型
+from .workflow import (
+    WorkflowDefinition, WorkflowNodeDefinition, WorkflowEdgeDefinition,
+    WorkflowExecution, WorkflowNodeExecution, WorkflowTemplate,
+    WorkflowVariable, WorkflowAlert,
+    WorkflowStatus, NodeType, NodeStatus, TriggerType
+)
 
 # Export all models for easy importing
 __all__ = [
@@ -49,6 +56,22 @@ __all__ = [
     "SyncExecution",
     "SyncTableResult",
     "SyncTemplate",
+
+    # Workflow models
+    "WorkflowDefinition",
+    "WorkflowNodeDefinition",
+    "WorkflowEdgeDefinition",
+    "WorkflowExecution",
+    "WorkflowNodeExecution",
+    "WorkflowTemplate",
+    "WorkflowVariable",
+    "WorkflowAlert",
+
+    # Workflow enums
+    "WorkflowStatus",
+    "NodeType",
+    "NodeStatus",
+    "TriggerType",
 ]
 
 
@@ -63,5 +86,8 @@ def get_all_models():
         BusinessSystem, BusinessSystemDataSource,
         # 🆕 New sync models
         SyncTask, SyncTableMapping, SyncExecution, SyncTableResult,
-        DataSourceMetadata, SyncTemplate
+        DataSourceMetadata, SyncTemplate,
+        WorkflowDefinition, WorkflowNodeDefinition, WorkflowEdgeDefinition,
+        WorkflowExecution, WorkflowNodeExecution, WorkflowTemplate,
+        WorkflowVariable, WorkflowAlert,
     ]
