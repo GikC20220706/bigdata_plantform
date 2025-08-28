@@ -119,6 +119,7 @@ class WorkflowDefinition(BaseModel):
     nodes = relationship("WorkflowNodeDefinition", back_populates="workflow", cascade="all, delete-orphan")
     edges = relationship("WorkflowEdgeDefinition", back_populates="workflow", cascade="all, delete-orphan")
     executions = relationship("WorkflowExecution", back_populates="workflow", cascade="all, delete-orphan")
+    alerts = relationship("WorkflowAlert", back_populates="workflow", cascade="all, delete-orphan")
 
 
 class WorkflowNodeDefinition(BaseModel):
@@ -320,11 +321,20 @@ class WorkflowTemplate(BaseModel):
     # 状态标识
     is_active = Column(Boolean, nullable=False, default=True, comment="是否激活")
     is_builtin = Column(Boolean, nullable=False, default=False, comment="是否内置模板")
-    is_public = Column(Boolean, nullable=False, default=False, comment="是否公开模板")
+    is_public = Column(Boolean, nullable=False, default=True, comment="是否公开模板")
+
+    # 权限控制
+    required_permissions = Column(JSON, nullable=True, comment="所需权限列表")
+    max_instances = Column(Integer, nullable=True, comment="最大实例数限制")
+    usage_limit = Column(Integer, nullable=True, comment="使用次数限制")
+
+    # 版本控制
+    version = Column(String(20), nullable=False, default="1.0.0", comment="模板版本")
+    changelog = Column(Text, nullable=True, comment="版本变更日志")
 
     # 创建者信息
     created_by = Column(String(100), nullable=True, comment="创建者")
-    created_by_name = Column(String(255), nullable=True, comment="创建者姓名")
+    created_by_name = Column(String(200), nullable=True, comment="创建者姓名")
 
 
 class WorkflowVariable(BaseModel):
@@ -357,23 +367,41 @@ class WorkflowAlert(BaseModel):
     __tablename__ = "workflow_alerts"
 
     # 基本信息
-    alert_name = Column(String(255), nullable=False, comment="告警规则名称")
+    alert_name = Column(String(255), nullable=False, comment="告警名称")
     description = Column(Text, nullable=True, comment="告警描述")
+    workflow_id = Column(Integer, ForeignKey("workflow_definitions.id"), nullable=False, comment="关联工作流ID")
 
-    # 关联工作流
-    workflow_id = Column(Integer, ForeignKey('workflow_definitions.id'), nullable=False, comment="关联工作流ID")
-
-    # 告警条件
+    # 告警类型和级别
     alert_type = Column(String(50), nullable=False, comment="告警类型")
-    condition_expression = Column(Text, nullable=False, comment="告警条件表达式")
-    severity_level = Column(String(20), nullable=False, default="medium", comment="严重级别")
+    severity = Column(String(20), nullable=False, default="medium", comment="严重级别")
 
-    # 通知配置
-    notification_channels = Column(JSON, nullable=True, comment="通知渠道配置")
-    notification_recipients = Column(JSON, nullable=True, comment="通知接收人")
+    # 触发条件
+    conditions = Column(JSON, nullable=False, comment="触发条件列表")
+    condition_logic = Column(String(10), nullable=False, default="AND", comment="条件逻辑")
 
-    # 状态标识
-    is_active = Column(Boolean, nullable=False, default=True, comment="是否激活")
+    # 通知设置
+    notification_channels = Column(JSON, nullable=False, comment="通知渠道列表")
+    recipients = Column(JSON, nullable=False, comment="接收人列表")
+
+    # 告警配置
+    is_enabled = Column(Boolean, nullable=False, default=True, comment="是否启用")
+    suppress_duration_minutes = Column(Integer, nullable=False, default=60, comment="告警抑制时长(分钟)")
+    max_alerts_per_hour = Column(Integer, nullable=False, default=10, comment="每小时最大告警次数")
+
+    # 自定义消息
+    custom_message_template = Column(Text, nullable=True, comment="自定义消息模板")
+    include_execution_context = Column(Boolean, nullable=False, default=True, comment="是否包含执行上下文")
+
+    # 自动恢复
+    auto_resolve = Column(Boolean, nullable=False, default=False, comment="是否自动恢复")
+    resolve_conditions = Column(JSON, nullable=True, comment="恢复条件")
+
+    # 创建者信息
+    created_by = Column(String(100), nullable=True, comment="创建者")
+
+    # 统计信息
+    trigger_count = Column(Integer, nullable=False, default=0, comment="触发次数")
+    last_trigger_time = Column(DateTime(timezone=True), nullable=True, comment="最后触发时间")
 
     # 关系映射
-    workflow = relationship("WorkflowDefinition")
+    workflow = relationship("WorkflowDefinition", back_populates="alerts")

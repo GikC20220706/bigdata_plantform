@@ -732,3 +732,251 @@ class WorkflowHealthCheck(BaseModel):
     issues: List[Dict[str, Any]] = Field(..., description="问题列表")
     recommendations: List[str] = Field(..., description="建议列表")
     last_check_time: datetime = Field(..., description="最后检查时间")
+
+# 添加验证相关模型
+class WorkflowValidationResult(BaseModel):
+    """工作流验证结果"""
+    is_valid: bool = Field(..., description="是否验证通过")
+    errors: List[str] = Field(default_factory=list, description="验证错误列表")
+    warnings: List[str] = Field(default_factory=list, description="验证警告列表")
+    validation_time: datetime = Field(default_factory=datetime.now, description="验证时间")
+
+
+class WorkflowDependencyGraph(BaseModel):
+    """工作流依赖关系图"""
+    workflow_id: int = Field(..., description="工作流ID")
+    nodes: List[Dict[str, Any]] = Field(..., description="节点列表")
+    edges: List[Dict[str, Any]] = Field(..., description="边列表")
+    layers: List[List[str]] = Field(..., description="拓扑分层")
+    max_depth: int = Field(..., description="最大深度")
+    has_cycles: bool = Field(..., description="是否存在循环依赖")
+
+class BatchWorkflowOperationRequest(BaseModel):
+    """批量工作流操作请求"""
+    workflow_ids: List[int] = Field(..., description="工作流ID列表")
+    operation: str = Field(..., description="操作类型")
+    operation_params: Optional[Dict[str, Any]] = Field(None, description="操作参数")
+
+class BatchOperationResult(BaseModel):
+    """批量操作结果"""
+    total: int = Field(..., description="总数")
+    successful: int = Field(..., description="成功数量")
+    failed: int = Field(..., description="失败数量")
+    success_ids: List[int] = Field(..., description="成功的工作流ID")
+    failed_results: List[Dict[str, Any]] = Field(..., description="失败结果详情")
+    operation_time: datetime = Field(..., description="操作时间")
+
+
+class WorkflowTemplateCategory(str, Enum):
+    """工作流模板分类"""
+    DATA_PROCESSING = "data_processing"
+    ETL = "etl"
+    API_INTEGRATION = "api_integration"
+    NOTIFICATION = "notification"
+    APPROVAL = "approval"
+    MONITORING = "monitoring"
+    CUSTOM = "custom"
+
+
+class CreateWorkflowTemplateRequest(BaseModel):
+    """创建工作流模板请求"""
+    template_name: str = Field(..., min_length=1, max_length=100, description="模板名称")
+    display_name: str = Field(..., min_length=1, max_length=200, description="显示名称")
+    description: Optional[str] = Field(None, max_length=1000, description="模板描述")
+    category: WorkflowTemplateCategory = Field(..., description="模板分类")
+    business_scenario: Optional[str] = Field(None, max_length=200, description="业务场景")
+    tags: Optional[List[str]] = Field(default_factory=list, description="标签列表")
+
+    # 模板配置
+    template_config: Dict[str, Any] = Field(..., description="模板配置JSON")
+    default_variables: Optional[Dict[str, Any]] = Field(None, description="默认变量配置")
+    parameter_schema: Optional[Dict[str, Any]] = Field(None, description="参数Schema定义")
+
+    # 模板属性
+    is_public: bool = Field(True, description="是否公开模板")
+    is_builtin: bool = Field(False, description="是否内置模板")
+    required_permissions: Optional[List[str]] = Field(None, description="所需权限列表")
+
+    # 使用限制
+    max_instances: Optional[int] = Field(None, description="最大实例数限制")
+    usage_limit: Optional[int] = Field(None, description="使用次数限制")
+
+    # 版本控制
+    version: str = Field("1.0.0", description="模板版本")
+    changelog: Optional[str] = Field(None, description="版本变更日志")
+
+
+class CreateWorkflowFromTemplateRequest(BaseModel):
+    """从模板创建工作流请求"""
+    template_id: int = Field(..., description="模板ID")
+    workflow_name: str = Field(..., min_length=1, max_length=100, description="新工作流名称")
+    display_name: Optional[str] = Field(None, max_length=200, description="显示名称")
+    description: Optional[str] = Field(None, max_length=1000, description="工作流描述")
+
+    # 参数替换
+    parameter_values: Optional[Dict[str, Any]] = Field(None, description="模板参数值")
+    variable_overrides: Optional[Dict[str, Any]] = Field(None, description="变量覆盖值")
+
+    # 自定义配置
+    custom_config: Optional[Dict[str, Any]] = Field(None, description="自定义配置")
+    category: Optional[str] = Field(None, description="工作流分类")
+    business_domain: Optional[str] = Field(None, description="业务域")
+    tags: Optional[List[str]] = Field(default_factory=list, description="标签列表")
+
+    # 执行设置
+    trigger_type: Optional[str] = Field(None, description="触发方式")
+    schedule_config: Optional[Dict[str, Any]] = Field(None, description="调度配置")
+
+    # 权限设置
+    visibility: str = Field("private", description="可见性")
+    owner_permissions: Optional[List[str]] = Field(None, description="所有者权限")
+
+
+class ExportFormat(str, Enum):
+    """导出格式"""
+    JSON = "json"
+    YAML = "yaml"
+    XML = "xml"
+
+
+class WorkflowExportRequest(BaseModel):
+    """工作流导出请求"""
+    workflow_ids: List[int] = Field(..., min_items=1, description="要导出的工作流ID列表")
+    export_format: ExportFormat = Field(ExportFormat.JSON, description="导出格式")
+
+    # 导出选项
+    include_execution_history: bool = Field(False, description="是否包含执行历史")
+    include_statistics: bool = Field(False, description="是否包含统计信息")
+    include_variables: bool = Field(True, description="是否包含变量定义")
+    include_templates: bool = Field(False, description="是否包含关联模板")
+
+    # 过滤选项
+    date_range_start: Optional[datetime] = Field(None, description="导出数据开始时间")
+    date_range_end: Optional[datetime] = Field(None, description="导出数据结束时间")
+    execution_status_filter: Optional[List[str]] = Field(None, description="执行状态过滤")
+
+    # 导出设置
+    compress: bool = Field(True, description="是否压缩导出文件")
+    password_protect: Optional[str] = Field(None, description="密码保护")
+    split_large_files: bool = Field(False, description="是否拆分大文件")
+    max_file_size_mb: int = Field(100, description="最大文件大小(MB)")
+
+
+class WorkflowImportRequest(BaseModel):
+    """工作流导入请求"""
+    import_data: str = Field(..., description="导入数据内容")
+    import_format: ExportFormat = Field(ExportFormat.JSON, description="导入格式")
+
+    # 导入选项
+    import_mode: str = Field("create_new", description="导入模式: create_new, update_existing, merge")
+    conflict_resolution: str = Field("skip", description="冲突解决策略: skip, overwrite, rename")
+
+    # 数据选项
+    import_execution_history: bool = Field(False, description="是否导入执行历史")
+    import_variables: bool = Field(True, description="是否导入变量")
+    import_templates: bool = Field(False, description="是否导入模板")
+
+    # 验证选项
+    validate_before_import: bool = Field(True, description="导入前是否验证")
+    dry_run: bool = Field(False, description="是否仅模拟导入")
+
+    # 目标设置
+    target_category: Optional[str] = Field(None, description="目标分类")
+    target_owner: Optional[str] = Field(None, description="目标所有者")
+    name_prefix: Optional[str] = Field(None, description="名称前缀")
+    name_suffix: Optional[str] = Field(None, description="名称后缀")
+
+
+class ImportResultItem(BaseModel):
+    """单个导入结果项"""
+    original_name: str = Field(..., description="原始名称")
+    imported_name: str = Field(..., description="导入后名称")
+    workflow_id: Optional[int] = Field(None, description="导入后的工作流ID")
+    status: str = Field(..., description="导入状态")
+    message: Optional[str] = Field(None, description="状态消息")
+    errors: Optional[List[str]] = Field(None, description="错误信息")
+    warnings: Optional[List[str]] = Field(None, description="警告信息")
+
+
+class WorkflowImportResult(BaseModel):
+    """工作流导入结果"""
+    import_id: str = Field(..., description="导入任务ID")
+    total_count: int = Field(..., description="总数量")
+    success_count: int = Field(..., description="成功数量")
+    failed_count: int = Field(..., description="失败数量")
+    skipped_count: int = Field(..., description="跳过数量")
+
+    # 详细结果
+    success_results: List[ImportResultItem] = Field(default_factory=list, description="成功结果")
+    failed_results: List[ImportResultItem] = Field(default_factory=list, description="失败结果")
+    skipped_results: List[ImportResultItem] = Field(default_factory=list, description="跳过结果")
+
+    # 统计信息
+    import_time: datetime = Field(default_factory=datetime.now, description="导入时间")
+    duration_seconds: Optional[float] = Field(None, description="导入耗时")
+
+    # 附加信息
+    validation_errors: Optional[List[str]] = Field(None, description="验证错误")
+    import_warnings: Optional[List[str]] = Field(None, description="导入警告")
+    summary_message: Optional[str] = Field(None, description="摘要消息")
+
+
+class AlertType(str, Enum):
+    """告警类型"""
+    EXECUTION_FAILURE = "execution_failure"
+    EXECUTION_TIMEOUT = "execution_timeout"
+    RESOURCE_EXHAUSTION = "resource_exhaustion"
+    PERFORMANCE_DEGRADATION = "performance_degradation"
+    DEPENDENCY_FAILURE = "dependency_failure"
+    SCHEDULE_MISS = "schedule_miss"
+    CUSTOM = "custom"
+
+
+class AlertChannel(str, Enum):
+    """告警渠道"""
+    EMAIL = "email"
+    SMS = "sms"
+    WEBHOOK = "webhook"
+    DINGTALK = "dingtalk"
+    WECHAT = "wechat"
+    SLACK = "slack"
+
+
+class AlertCondition(BaseModel):
+    """告警条件"""
+    metric: str = Field(..., description="监控指标")
+    operator: str = Field(..., description="比较操作符: gt, lt, eq, ne, gte, lte")
+    threshold: float = Field(..., description="阈值")
+    duration_minutes: Optional[int] = Field(None, description="持续时间(分钟)")
+
+
+class CreateWorkflowAlertRequest(BaseModel):
+    """创建工作流告警请求"""
+    alert_name: str = Field(..., min_length=1, max_length=100, description="告警名称")
+    description: Optional[str] = Field(None, max_length=500, description="告警描述")
+    workflow_id: int = Field(..., description="关联工作流ID")
+
+    # 告警类型和级别
+    alert_type: AlertType = Field(..., description="告警类型")
+    severity: str = Field("medium", description="严重级别: low, medium, high, critical")
+
+    # 触发条件
+    conditions: List[AlertCondition] = Field(..., min_items=1, description="触发条件列表")
+    condition_logic: str = Field("AND", description="条件逻辑: AND, OR")
+
+    # 通知设置
+    notification_channels: List[AlertChannel] = Field(..., min_items=1, description="通知渠道")
+    recipients: List[str] = Field(..., min_items=1, description="接收人列表")
+
+    # 告警配置
+    is_enabled: bool = Field(True, description="是否启用")
+    suppress_duration_minutes: int = Field(60, description="告警抑制时长(分钟)")
+    max_alerts_per_hour: int = Field(10, description="每小时最大告警次数")
+
+    # 自定义消息
+    custom_message_template: Optional[str] = Field(None, description="自定义消息模板")
+    include_execution_context: bool = Field(True, description="是否包含执行上下文")
+
+    # 自动恢复
+    auto_resolve: bool = Field(False, description="是否自动恢复")
+    resolve_conditions: Optional[List[AlertCondition]] = Field(None, description="恢复条件")

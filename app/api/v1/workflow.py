@@ -26,6 +26,7 @@ from app.services.workflow_validation_service import workflow_validation_service
 from app.utils.database import get_async_db
 from app.utils.response import create_response
 from config.settings import settings
+import uuid
 
 router = APIRouter()
 
@@ -549,6 +550,547 @@ async def _generate_workflow_analysis(workflow_id: int, workflow_request: Create
     except Exception as e:
         logger.error(f"生成工作流分析失败: {e}")
 
+
+@router.post("/templates/", summary="创建工作流模板")
+async def create_workflow_template(
+        template_request: CreateWorkflowTemplateRequest,
+        db: AsyncSession = Depends(get_async_db),
+        creator_id: Optional[str] = Query(None, description="创建者ID")
+):
+    """创建工作流模板"""
+    try:
+        result = await workflow_orchestration_service.create_workflow_template(
+            db, template_request, creator_id
+        )
+
+        return create_response(
+            data=result,
+            message=f"工作流模板 '{template_request.template_name}' 创建成功"
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        logger.error(f"创建工作流模板失败: {e}")
+        raise HTTPException(status_code=500, detail=f"创建工作流模板失败: {str(e)}")
+
+
+@router.get("/templates/", summary="获取工作流模板列表")
+async def get_workflow_templates(
+        db: AsyncSession = Depends(get_async_db),
+        category: Optional[str] = Query(None, description="模板分类"),
+        business_scenario: Optional[str] = Query(None, description="业务场景"),
+        is_public: Optional[bool] = Query(None, description="是否公开"),
+        is_builtin: Optional[bool] = Query(None, description="是否内置"),
+        keyword: Optional[str] = Query(None, description="搜索关键词"),
+        page: int = Query(1, ge=1, description="页码"),
+        page_size: int = Query(20, ge=1, le=100, description="每页大小")
+):
+    """获取工作流模板列表"""
+    try:
+        result = await workflow_orchestration_service.get_workflow_templates(
+            db, category, business_scenario, is_public, is_builtin, keyword, page, page_size
+        )
+
+        return create_response(
+            data=result,
+            message="获取工作流模板列表成功"
+        )
+    except Exception as e:
+        logger.error(f"获取工作流模板列表失败: {e}")
+        raise HTTPException(status_code=500, detail=f"获取工作流模板列表失败: {str(e)}")
+
+
+@router.get("/templates/{template_id}", summary="获取工作流模板详情")
+async def get_workflow_template(
+        template_id: int,
+        db: AsyncSession = Depends(get_async_db)
+):
+    """获取工作流模板详情"""
+    try:
+        template = await workflow_orchestration_service.get_workflow_template_by_id(db, template_id)
+
+        if not template:
+            raise HTTPException(status_code=404, detail="工作流模板不存在")
+
+        return create_response(
+            data=template.dict(),
+            message="获取工作流模板详情成功"
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"获取工作流模板详情失败: {e}")
+        raise HTTPException(status_code=500, detail=f"获取工作流模板详情失败: {str(e)}")
+
+
+@router.post("/templates/{template_id}/create-workflow", summary="从模板创建工作流")
+async def create_workflow_from_template(
+        template_id: int,
+        create_request: CreateWorkflowFromTemplateRequest,
+        db: AsyncSession = Depends(get_async_db),
+        creator_id: Optional[str] = Query(None, description="创建者ID")
+):
+    """从模板创建工作流"""
+    try:
+        # 验证模板ID与请求中的模板ID一致
+        if create_request.template_id != template_id:
+            raise ValueError("URL中的模板ID与请求体中的模板ID不匹配")
+
+        result = await workflow_orchestration_service.create_workflow_from_template(
+            db, create_request, creator_id
+        )
+
+        return create_response(
+            data=result,
+            message=f"从模板创建工作流 '{create_request.workflow_name}' 成功"
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        logger.error(f"从模板创建工作流失败: {e}")
+        raise HTTPException(status_code=500, detail=f"从模板创建工作流失败: {str(e)}")
+
+
+@router.put("/templates/{template_id}", summary="更新工作流模板")
+async def update_workflow_template(
+        template_id: int,
+        update_request: CreateWorkflowTemplateRequest,  # 复用创建请求结构
+        db: AsyncSession = Depends(get_async_db)
+):
+    """更新工作流模板"""
+    try:
+        result = await workflow_orchestration_service.update_workflow_template(
+            db, template_id, update_request
+        )
+
+        return create_response(
+            data=result,
+            message=f"工作流模板更新成功"
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        logger.error(f"更新工作流模板失败: {e}")
+        raise HTTPException(status_code=500, detail=f"更新工作流模板失败: {str(e)}")
+
+
+@router.delete("/templates/{template_id}", summary="删除工作流模板")
+async def delete_workflow_template(
+        template_id: int,
+        db: AsyncSession = Depends(get_async_db),
+        force: bool = Query(False, description="是否强制删除")
+):
+    """删除工作流模板"""
+    try:
+        result = await workflow_orchestration_service.delete_workflow_template(
+            db, template_id, force
+        )
+
+        return create_response(
+            data=result,
+            message=result["message"]
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        logger.error(f"删除工作流模板失败: {e}")
+        raise HTTPException(status_code=500, detail=f"删除工作流模板失败: {str(e)}")
+
+
+# ==================== 工作流导入导出 ====================
+
+@router.post("/export", summary="导出工作流")
+async def export_workflows(
+        export_request: WorkflowExportRequest,
+        background_tasks: BackgroundTasks,
+        db: AsyncSession = Depends(get_async_db)
+
+):
+    """导出工作流配置和数据"""
+    try:
+        # 启动异步导出任务
+        export_task_id = f"export_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:8]}"
+
+        background_tasks.add_task(
+            _async_export_workflows,
+            db, export_request, export_task_id
+        )
+
+        return create_response(
+            data={
+                "export_task_id": export_task_id,
+                "status": "started",
+                "workflow_count": len(export_request.workflow_ids)
+            },
+            message="工作流导出任务已启动"
+        )
+    except Exception as e:
+        logger.error(f"启动工作流导出失败: {e}")
+        raise HTTPException(status_code=500, detail=f"启动工作流导出失败: {str(e)}")
+
+
+@router.get("/export/{export_task_id}/status", summary="获取导出任务状态")
+async def get_export_status(
+        export_task_id: str,
+        db: AsyncSession = Depends(get_async_db)
+):
+    """获取导出任务状态"""
+    try:
+        status = await workflow_orchestration_service.get_export_task_status(db, export_task_id)
+
+        return create_response(
+            data=status,
+            message="获取导出任务状态成功"
+        )
+    except Exception as e:
+        logger.error(f"获取导出任务状态失败: {e}")
+        raise HTTPException(status_code=500, detail=f"获取导出任务状态失败: {str(e)}")
+
+
+@router.get("/export/{export_task_id}/download", summary="下载导出文件")
+async def download_export_file(
+        export_task_id: str,
+        db: AsyncSession = Depends(get_async_db)
+):
+    """下载导出文件"""
+    try:
+        file_info = await workflow_orchestration_service.get_export_file(db, export_task_id)
+
+        if not file_info:
+            raise HTTPException(status_code=404, detail="导出文件不存在或已过期")
+
+        from fastapi.responses import FileResponse
+        return FileResponse(
+            file_info["file_path"],
+            filename=file_info["filename"],
+            media_type=file_info["media_type"]
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"下载导出文件失败: {e}")
+        raise HTTPException(status_code=500, detail=f"下载导出文件失败: {str(e)}")
+
+
+@router.post("/import", summary="导入工作流")
+async def import_workflows(
+        import_request: WorkflowImportRequest,
+        background_tasks: BackgroundTasks,
+        db: AsyncSession = Depends(get_async_db),
+        importer_id: Optional[str] = Query(None, description="导入者ID")
+):
+    """导入工作流配置和数据"""
+    try:
+        # 如果是试运行，直接执行验证
+        if import_request.dry_run:
+            result = await workflow_orchestration_service.validate_import_data(
+                db, import_request
+            )
+            return create_response(
+                data=result.dict(),
+                message="工作流导入验证完成"
+            )
+
+        # 启动异步导入任务
+        import_task_id = f"import_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:8]}"
+
+        background_tasks.add_task(
+            _async_import_workflows,
+            db, import_request, import_task_id, importer_id
+        )
+
+        return create_response(
+            data={
+                "import_task_id": import_task_id,
+                "status": "started"
+            },
+            message="工作流导入任务已启动"
+        )
+    except Exception as e:
+        logger.error(f"启动工作流导入失败: {e}")
+        raise HTTPException(status_code=500, detail=f"启动工作流导入失败: {str(e)}")
+
+
+@router.get("/import/{import_task_id}/status", summary="获取导入任务状态")
+async def get_import_status(
+        import_task_id: str,
+        db: AsyncSession = Depends(get_async_db)
+):
+    """获取导入任务状态和结果"""
+    try:
+        status = await workflow_orchestration_service.get_import_task_status(db, import_task_id)
+
+        return create_response(
+            data=status,
+            message="获取导入任务状态成功"
+        )
+    except Exception as e:
+        logger.error(f"获取导入任务状态失败: {e}")
+        raise HTTPException(status_code=500, detail=f"获取导入任务状态失败: {str(e)}")
+
+
+# ==================== 工作流告警管理 ====================
+
+@router.post("/{workflow_id}/alerts", summary="创建工作流告警")
+async def create_workflow_alert(
+        workflow_id: int,
+        alert_request: CreateWorkflowAlertRequest,
+        db: AsyncSession = Depends(get_async_db),
+        creator_id: Optional[str] = Query(None, description="创建者ID")
+):
+    """为工作流创建告警规则"""
+    try:
+        # 验证工作流ID
+        if alert_request.workflow_id != workflow_id:
+            raise ValueError("URL中的工作流ID与请求体中的工作流ID不匹配")
+
+        result = await workflow_orchestration_service.create_workflow_alert(
+            db, alert_request, creator_id
+        )
+
+        return create_response(
+            data=result,
+            message=f"工作流告警 '{alert_request.alert_name}' 创建成功"
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        logger.error(f"创建工作流告警失败: {e}")
+        raise HTTPException(status_code=500, detail=f"创建工作流告警失败: {str(e)}")
+
+
+@router.get("/{workflow_id}/alerts", summary="获取工作流告警列表")
+async def get_workflow_alerts(
+        workflow_id: int,
+        db: AsyncSession = Depends(get_async_db),
+        alert_type: Optional[str] = Query(None, description="告警类型过滤"),
+        severity: Optional[str] = Query(None, description="严重级别过滤"),
+        is_enabled: Optional[bool] = Query(None, description="是否启用过滤"),
+        page: int = Query(1, ge=1, description="页码"),
+        page_size: int = Query(20, ge=1, le=100, description="每页大小")
+):
+    """获取工作流的告警规则列表"""
+    try:
+        result = await workflow_orchestration_service.get_workflow_alerts(
+            db, workflow_id, alert_type, severity, is_enabled, page, page_size
+        )
+
+        return create_response(
+            data=result,
+            message="获取工作流告警列表成功"
+        )
+    except Exception as e:
+        logger.error(f"获取工作流告警列表失败: {e}")
+        raise HTTPException(status_code=500, detail=f"获取工作流告警列表失败: {str(e)}")
+
+
+@router.get("/alerts/{alert_id}", summary="获取告警详情")
+async def get_workflow_alert(
+        alert_id: int,
+        db: AsyncSession = Depends(get_async_db)
+):
+    """获取告警规则详情"""
+    try:
+        alert = await workflow_orchestration_service.get_workflow_alert_by_id(db, alert_id)
+
+        if not alert:
+            raise HTTPException(status_code=404, detail="告警规则不存在")
+
+        return create_response(
+            data=alert.dict(),
+            message="获取告警详情成功"
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"获取告警详情失败: {e}")
+        raise HTTPException(status_code=500, detail=f"获取告警详情失败: {str(e)}")
+
+
+@router.put("/alerts/{alert_id}", summary="更新告警规则")
+async def update_workflow_alert(
+        alert_id: int,
+        alert_request: CreateWorkflowAlertRequest,
+        db: AsyncSession = Depends(get_async_db)
+):
+    """更新告警规则"""
+    try:
+        result = await workflow_orchestration_service.update_workflow_alert(
+            db, alert_id, alert_request
+        )
+
+        return create_response(
+            data=result,
+            message="告警规则更新成功"
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        logger.error(f"更新告警规则失败: {e}")
+        raise HTTPException(status_code=500, detail=f"更新告警规则失败: {str(e)}")
+
+
+@router.delete("/alerts/{alert_id}", summary="删除告警规则")
+async def delete_workflow_alert(
+        alert_id: int,
+        db: AsyncSession = Depends(get_async_db)
+):
+    """删除告警规则"""
+    try:
+        result = await workflow_orchestration_service.delete_workflow_alert(db, alert_id)
+
+        return create_response(
+            data=result,
+            message=result["message"]
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        logger.error(f"删除告警规则失败: {e}")
+        raise HTTPException(status_code=500, detail=f"删除告警规则失败: {str(e)}")
+
+
+@router.post("/alerts/{alert_id}/test", summary="测试告警规则")
+async def test_workflow_alert(
+        alert_id: int,
+        db: AsyncSession = Depends(get_async_db),
+        test_data: Optional[Dict[str, Any]] = Body(None, description="测试数据")
+):
+    """测试告警规则"""
+    try:
+        result = await workflow_orchestration_service.test_workflow_alert(
+            db, alert_id, test_data
+        )
+
+        return create_response(
+            data=result,
+            message="告警规则测试完成"
+        )
+    except Exception as e:
+        logger.error(f"测试告警规则失败: {e}")
+        raise HTTPException(status_code=500, detail=f"测试告警规则失败: {str(e)}")
+
+
+# ==================== 工作流变量管理 ====================
+
+@router.get("/{workflow_id}/variables", summary="获取工作流变量")
+async def get_workflow_variables(
+        workflow_id: int,
+        db: AsyncSession = Depends(get_async_db),
+        variable_type: Optional[str] = Query(None, description="变量类型过滤"),
+        is_required: Optional[bool] = Query(None, description="是否必填过滤"),
+        is_sensitive: Optional[bool] = Query(None, description="是否敏感过滤")
+):
+    """获取工作流的变量定义"""
+    try:
+        variables = await workflow_orchestration_service.get_workflow_variables(
+            db, workflow_id, variable_type, is_required, is_sensitive
+        )
+
+        return create_response(
+            data=variables,
+            message="获取工作流变量成功"
+        )
+    except Exception as e:
+        logger.error(f"获取工作流变量失败: {e}")
+        raise HTTPException(status_code=500, detail=f"获取工作流变量失败: {str(e)}")
+
+
+@router.put("/{workflow_id}/variables", summary="更新工作流变量")
+async def update_workflow_variables(
+        workflow_id: int,
+        variables: List[Dict[str, Any]] = Body(..., description="变量列表"),
+        db: AsyncSession = Depends(get_async_db)
+):
+    """更新工作流变量定义"""
+    try:
+        result = await workflow_orchestration_service.update_workflow_variables(
+            db, workflow_id, variables
+        )
+
+        return create_response(
+            data=result,
+            message="工作流变量更新成功"
+        )
+    except Exception as e:
+        logger.error(f"更新工作流变量失败: {e}")
+        raise HTTPException(status_code=500, detail=f"更新工作流变量失败: {str(e)}")
+
+
+# ==================== 工作流调度管理 ====================
+
+@router.post("/{workflow_id}/schedule", summary="设置工作流调度")
+async def set_workflow_schedule(
+        workflow_id: int,
+        schedule_config: Dict[str, Any] = Body(..., description="调度配置"),
+        db: AsyncSession = Depends(get_async_db)
+):
+    """设置或更新工作流调度配置"""
+    try:
+        result = await workflow_orchestration_service.set_workflow_schedule(
+            db, workflow_id, schedule_config
+        )
+
+        return create_response(
+            data=result,
+            message="工作流调度配置成功"
+        )
+    except Exception as e:
+        logger.error(f"设置工作流调度失败: {e}")
+        raise HTTPException(status_code=500, detail=f"设置工作流调度失败: {str(e)}")
+
+
+@router.delete("/{workflow_id}/schedule", summary="删除工作流调度")
+async def remove_workflow_schedule(
+        workflow_id: int,
+        db: AsyncSession = Depends(get_async_db)
+):
+    """删除工作流调度配置"""
+    try:
+        result = await workflow_orchestration_service.remove_workflow_schedule(
+            db, workflow_id
+        )
+
+        return create_response(
+            data=result,
+            message="工作流调度已删除"
+        )
+    except Exception as e:
+        logger.error(f"删除工作流调度失败: {e}")
+        raise HTTPException(status_code=500, detail=f"删除工作流调度失败: {str(e)}")
+
+
+# ==================== 内部辅助函数 ====================
+
+async def _async_export_workflows(
+        db: AsyncSession,
+        export_request: WorkflowExportRequest,
+        export_task_id: str
+):
+    """异步导出工作流"""
+    try:
+        await workflow_orchestration_service.execute_export_task(
+            db, export_request, export_task_id
+        )
+        logger.info(f"工作流导出任务完成: {export_task_id}")
+    except Exception as e:
+        logger.error(f"工作流导出任务失败: {export_task_id}, {e}")
+
+
+async def _async_import_workflows(
+        db: AsyncSession,
+        import_request: WorkflowImportRequest,
+        import_task_id: str,
+        importer_id: Optional[str]
+):
+    """异步导入工作流"""
+    try:
+        await workflow_orchestration_service.execute_import_task(
+            db, import_request, import_task_id, importer_id
+        )
+        logger.info(f"工作流导入任务完成: {import_task_id}")
+    except Exception as e:
+        logger.error(f"工作流导入任务失败: {import_task_id}, {e}")
 # ==================== WebSocket支持（可选） ====================
 
 # 如果需要实时状态推送，可以添加WebSocket端点

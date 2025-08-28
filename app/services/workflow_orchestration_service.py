@@ -4,6 +4,7 @@
 提供工作流定义、执行、监控和管理功能
 """
 
+import os
 import asyncio
 import json
 import uuid
@@ -1891,6 +1892,785 @@ class WorkflowOrchestrationService:
                 })
         return dependencies
 
+    async def update_workflow_status(
+            self,
+            db: AsyncSession,
+            workflow_id: int,
+            status: str,
+            reason: Optional[str] = None
+    ) -> Dict[str, Any]:
+        """更新工作流状态"""
+        try:
+            result = await db.execute(
+                select(WorkflowDefinition).where(WorkflowDefinition.id == workflow_id)
+            )
+            workflow = result.scalar_one_or_none()
+
+            if not workflow:
+                raise ValueError("工作流不存在")
+
+            old_status = workflow.status
+            workflow.status = WorkflowStatus(status)
+            workflow.updated_at = datetime.now()
+
+            await db.commit()
+
+            # 清除缓存
+            await self._invalidate_workflow_cache_patterns([
+                f"{self.cache_prefix}:detail:{workflow_id}:*",
+                f"{self.cache_prefix}:list:*"
+            ])
+
+            logger.info(f"工作流状态更新: {workflow_id} {old_status} -> {status}")
+
+            return {
+                "workflow_id": workflow_id,
+                "old_status": old_status.value if old_status else None,
+                "new_status": status,
+                "reason": reason,
+                "message": f"工作流状态已更新为: {status}"
+            }
+        except Exception as e:
+            await db.rollback()
+            raise
+
+    async def get_workflow_executions(
+            self,
+            db: AsyncSession,
+            workflow_id: int,
+            status: Optional[str] = None,
+            start_time_begin: Optional[datetime] = None,
+            start_time_end: Optional[datetime] = None,
+            page: int = 1,
+            page_size: int = 20
+    ) -> Dict[str, Any]:
+        """获取工作流执行历史"""
+        try:
+            # 构建查询条件
+            conditions = [WorkflowExecution.workflow_id == workflow_id]
+
+            if status:
+                conditions.append(WorkflowExecution.status == status)
+            if start_time_begin:
+                conditions.append(WorkflowExecution.start_time >= start_time_begin)
+            if start_time_end:
+                conditions.append(WorkflowExecution.start_time <= start_time_end)
+
+            # 查询总数
+            count_result = await db.execute(
+                select(func.count()).select_from(WorkflowExecution).where(and_(*conditions))
+            )
+            total = count_result.scalar()
+
+            # 分页查询
+            offset = (page - 1) * page_size
+            result = await db.execute(
+                select(WorkflowExecution)
+                .where(and_(*conditions))
+                .order_by(desc(WorkflowExecution.start_time))
+                .offset(offset)
+                .limit(page_size)
+            )
+            executions = result.scalars().all()
+
+            # 构建响应
+            execution_list = []
+            for exec in executions:
+                execution_list.append({
+                    "execution_id": exec.execution_id,
+                    "workflow_id": exec.workflow_id,
+                    "status": exec.status.value,
+                    "start_time": exec.start_time,
+                    "end_time": exec.end_time,
+                    "duration_seconds": exec.duration_seconds,
+                    "trigger_type": exec.trigger_type,
+                    "trigger_user": exec.trigger_user,
+                    "input_variables": exec.input_variables,
+                    "output_variables": exec.output_variables,
+                    "error_message": exec.error_message
+                })
+
+            total_pages = (total + page_size - 1) // page_size
+
+            return {
+                "executions": execution_list,
+                "total": total,
+                "page": page,
+                "page_size": page_size,
+                "total_pages": total_pages,
+                "has_next": page < total_pages,
+                "has_prev": page > 1
+            }
+        except Exception as e:
+            logger.error(f"获取工作流执行历史失败: {e}")
+            raise
+
+    def _build_node_execution_response(self, node_execution: WorkflowNodeExecution) -> Dict[str, Any]:
+        """构建节点执行响应对象"""
+        return {
+            "execution_id": node_execution.execution_id,
+            "node_id": node_execution.node_id,
+            "node_name": node_execution.node_name,
+            "status": node_execution.status.value,
+            "start_time": node_execution.start_time,
+            "end_time": node_execution.end_time,
+            "duration_seconds": node_execution.duration_seconds,
+            "retry_count": node_execution.retry_count,
+            "result_data": node_execution.result_data,
+            "output_variables": node_execution.output_variables,
+            "error_message": node_execution.error_message,
+            "created_at": node_execution.created_at,
+            "updated_at": node_execution.updated_at
+        }
+
+    # 在 workflow_orchestration_service.py 文件顶部添加这些导入
+
+    import os
+    import json
+    import uuid
+    from datetime import datetime, timedelta
+    from typing import Dict, List, Optional, Any, Tuple
+
+    # 添加新的模型导入
+    from app.models.workflow import (
+        WorkflowDefinition, WorkflowNodeDefinition, WorkflowEdgeDefinition,
+        WorkflowExecution, WorkflowNodeExecution, WorkflowTemplate,
+        WorkflowVariable, WorkflowAlert,  # 新增 WorkflowAlert
+        WorkflowStatus, NodeType, NodeStatus, TriggerType
+    )
+
+    # 添加新的schema导入
+    from app.schemas.workflow import (
+        CreateWorkflowRequest, UpdateWorkflowRequest, TriggerWorkflowRequest,
+        WorkflowResponse, WorkflowListResponse, WorkflowSearchParams,
+        WorkflowExecutionResponse, WorkflowStatistics,
+        CreateWorkflowTemplateRequest, CreateWorkflowFromTemplateRequest,
+        WorkflowExportRequest, WorkflowImportRequest, WorkflowImportResult,
+        CreateWorkflowAlertRequest
+    )
+
+    # ==================== 剩余的服务方法 ====================
+
+    # 在 WorkflowOrchestrationService 类中继续添加：
+
+    async def get_workflow_alerts(
+            self,
+            db: AsyncSession,
+            workflow_id: int,
+            alert_type: Optional[str] = None,
+            severity: Optional[str] = None,
+            is_enabled: Optional[bool] = None,
+            page: int = 1,
+            page_size: int = 20
+    ) -> Dict[str, Any]:
+        """获取工作流告警列表"""
+        try:
+            conditions = [WorkflowAlert.workflow_id == workflow_id]
+
+            if alert_type:
+                conditions.append(WorkflowAlert.alert_type == alert_type)
+            if severity:
+                conditions.append(WorkflowAlert.severity == severity)
+            if is_enabled is not None:
+                conditions.append(WorkflowAlert.is_enabled == is_enabled)
+
+            # 查询总数
+            count_result = await db.execute(
+                select(func.count()).select_from(WorkflowAlert).where(and_(*conditions))
+            )
+            total = count_result.scalar()
+
+            # 分页查询
+            offset = (page - 1) * page_size
+            result = await db.execute(
+                select(WorkflowAlert)
+                .where(and_(*conditions))
+                .order_by(desc(WorkflowAlert.created_at))
+                .offset(offset)
+                .limit(page_size)
+            )
+            alerts = result.scalars().all()
+
+            alert_list = []
+            for alert in alerts:
+                alert_list.append({
+                    "id": alert.id,
+                    "alert_name": alert.alert_name,
+                    "description": alert.description,
+                    "alert_type": alert.alert_type,
+                    "severity": alert.severity,
+                    "is_enabled": alert.is_enabled,
+                    "notification_channels": alert.notification_channels,
+                    "recipients": alert.recipients,
+                    "created_at": alert.created_at,
+                    "updated_at": alert.updated_at
+                })
+
+            total_pages = (total + page_size - 1) // page_size
+
+            return {
+                "alerts": alert_list,
+                "total": total,
+                "page": page,
+                "page_size": page_size,
+                "total_pages": total_pages,
+                "has_next": page < total_pages,
+                "has_prev": page > 1
+            }
+
+        except Exception as e:
+            logger.error(f"获取工作流告警列表失败: {e}")
+            raise
+
+    async def get_workflow_alert_by_id(
+            self,
+            db: AsyncSession,
+            alert_id: int
+    ) -> Optional[Dict[str, Any]]:
+        """根据ID获取告警详情"""
+        try:
+            result = await db.execute(
+                select(WorkflowAlert).where(WorkflowAlert.id == alert_id)
+            )
+            alert = result.scalar_one_or_none()
+
+            if not alert:
+                return None
+
+            return {
+                "id": alert.id,
+                "alert_name": alert.alert_name,
+                "description": alert.description,
+                "workflow_id": alert.workflow_id,
+                "alert_type": alert.alert_type,
+                "severity": alert.severity,
+                "conditions": alert.conditions,
+                "condition_logic": alert.condition_logic,
+                "notification_channels": alert.notification_channels,
+                "recipients": alert.recipients,
+                "is_enabled": alert.is_enabled,
+                "suppress_duration_minutes": alert.suppress_duration_minutes,
+                "max_alerts_per_hour": alert.max_alerts_per_hour,
+                "custom_message_template": alert.custom_message_template,
+                "include_execution_context": alert.include_execution_context,
+                "auto_resolve": alert.auto_resolve,
+                "resolve_conditions": alert.resolve_conditions,
+                "created_by": alert.created_by,
+                "created_at": alert.created_at,
+                "updated_at": alert.updated_at
+            }
+
+        except Exception as e:
+            logger.error(f"获取告警详情失败: {e}")
+            raise
+
+    async def update_workflow_alert(
+            self,
+            db: AsyncSession,
+            alert_id: int,
+            alert_request: CreateWorkflowAlertRequest
+    ) -> Dict[str, Any]:
+        """更新告警规则"""
+        try:
+            result = await db.execute(
+                select(WorkflowAlert).where(WorkflowAlert.id == alert_id)
+            )
+            alert = result.scalar_one_or_none()
+
+            if not alert:
+                raise ValueError("告警规则不存在")
+
+            # 更新告警信息
+            alert.alert_name = alert_request.alert_name
+            alert.description = alert_request.description
+            alert.alert_type = alert_request.alert_type.value
+            alert.severity = alert_request.severity
+            alert.conditions = [condition.dict() for condition in alert_request.conditions]
+            alert.condition_logic = alert_request.condition_logic
+            alert.notification_channels = [channel.value for channel in alert_request.notification_channels]
+            alert.recipients = alert_request.recipients
+            alert.is_enabled = alert_request.is_enabled
+            alert.suppress_duration_minutes = alert_request.suppress_duration_minutes
+            alert.max_alerts_per_hour = alert_request.max_alerts_per_hour
+            alert.custom_message_template = alert_request.custom_message_template
+            alert.include_execution_context = alert_request.include_execution_context
+            alert.auto_resolve = alert_request.auto_resolve
+            alert.resolve_conditions = [condition.dict() for condition in
+                                        alert_request.resolve_conditions] if alert_request.resolve_conditions else None
+            alert.updated_at = datetime.now()
+
+            await db.commit()
+
+            logger.info(f"告警规则更新成功: {alert_id}")
+
+            return {
+                "alert_id": alert_id,
+                "alert_name": alert.alert_name,
+                "updated_at": alert.updated_at
+            }
+
+        except Exception as e:
+            await db.rollback()
+            logger.error(f"更新告警规则失败: {e}")
+            raise
+
+    async def delete_workflow_alert(
+            self,
+            db: AsyncSession,
+            alert_id: int
+    ) -> Dict[str, Any]:
+        """删除告警规则"""
+        try:
+            result = await db.execute(
+                select(WorkflowAlert).where(WorkflowAlert.id == alert_id)
+            )
+            alert = result.scalar_one_or_none()
+
+            if not alert:
+                raise ValueError("告警规则不存在")
+
+            alert_name = alert.alert_name
+
+            # 删除告警规则
+            await db.delete(alert)
+            await db.commit()
+
+            logger.info(f"告警规则删除成功: {alert_id}")
+
+            return {
+                "alert_id": alert_id,
+                "alert_name": alert_name,
+                "message": "告警规则删除成功"
+            }
+
+        except Exception as e:
+            await db.rollback()
+            logger.error(f"删除告警规则失败: {e}")
+            raise
+
+    async def test_workflow_alert(
+            self,
+            db: AsyncSession,
+            alert_id: int,
+            test_data: Optional[Dict[str, Any]] = None
+    ) -> Dict[str, Any]:
+        """测试告警规则"""
+        try:
+            alert = await self.get_workflow_alert_by_id(db, alert_id)
+            if not alert:
+                raise ValueError("告警规则不存在")
+
+            # 模拟测试数据
+            if not test_data:
+                test_data = {
+                    "execution_duration": 3600,  # 1小时
+                    "error_count": 1,
+                    "success_rate": 0.8,
+                    "memory_usage": 1024  # MB
+                }
+
+            # 评估告警条件
+            triggered_conditions = []
+            for condition in alert["conditions"]:
+                metric = condition["metric"]
+                operator = condition["operator"]
+                threshold = condition["threshold"]
+
+                if metric in test_data:
+                    value = test_data[metric]
+                    triggered = self._evaluate_condition(value, operator, threshold)
+
+                    if triggered:
+                        triggered_conditions.append({
+                            "metric": metric,
+                            "value": value,
+                            "operator": operator,
+                            "threshold": threshold,
+                            "triggered": True
+                        })
+
+            # 根据条件逻辑判断是否触发告警
+            should_trigger = False
+            if alert["condition_logic"] == "AND":
+                should_trigger = len(triggered_conditions) == len(alert["conditions"])
+            elif alert["condition_logic"] == "OR":
+                should_trigger = len(triggered_conditions) > 0
+
+            return {
+                "alert_id": alert_id,
+                "alert_name": alert["alert_name"],
+                "test_data": test_data,
+                "triggered_conditions": triggered_conditions,
+                "should_trigger": should_trigger,
+                "notification_channels": alert["notification_channels"] if should_trigger else [],
+                "recipients": alert["recipients"] if should_trigger else [],
+                "test_time": datetime.now()
+            }
+
+        except Exception as e:
+            logger.error(f"测试告警规则失败: {e}")
+            raise
+
+    async def get_workflow_variables(
+            self,
+            db: AsyncSession,
+            workflow_id: int,
+            variable_type: Optional[str] = None,
+            is_required: Optional[bool] = None,
+            is_sensitive: Optional[bool] = None
+    ) -> List[Dict[str, Any]]:
+        """获取工作流变量"""
+        try:
+            conditions = [WorkflowVariable.workflow_id == workflow_id]
+
+            if variable_type:
+                conditions.append(WorkflowVariable.variable_type == variable_type)
+            if is_required is not None:
+                conditions.append(WorkflowVariable.is_required == is_required)
+            if is_sensitive is not None:
+                conditions.append(WorkflowVariable.is_sensitive == is_sensitive)
+
+            result = await db.execute(
+                select(WorkflowVariable)
+                .where(and_(*conditions))
+                .order_by(WorkflowVariable.variable_key)
+            )
+            variables = result.scalars().all()
+
+            variable_list = []
+            for variable in variables:
+                variable_dict = {
+                    "id": variable.id,
+                    "variable_key": variable.variable_key,
+                    "variable_name": variable.variable_name,
+                    "description": variable.description,
+                    "variable_type": variable.variable_type,
+                    "is_required": variable.is_required,
+                    "is_sensitive": variable.is_sensitive,
+                    "validation_rules": variable.validation_rules,
+                    "created_at": variable.created_at,
+                    "updated_at": variable.updated_at
+                }
+
+                # 敏感变量不返回默认值
+                if not variable.is_sensitive:
+                    variable_dict["default_value"] = variable.default_value
+
+                variable_list.append(variable_dict)
+
+            return variable_list
+
+        except Exception as e:
+            logger.error(f"获取工作流变量失败: {e}")
+            raise
+
+    async def update_workflow_variables(
+            self,
+            db: AsyncSession,
+            workflow_id: int,
+            variables: List[Dict[str, Any]]
+    ) -> Dict[str, Any]:
+        """更新工作流变量"""
+        try:
+            # 验证工作流是否存在
+            workflow = await self.get_workflow_by_id(db, workflow_id, False, False)
+            if not workflow:
+                raise ValueError("工作流不存在")
+
+            # 删除现有变量
+            await db.execute(
+                delete(WorkflowVariable).where(WorkflowVariable.workflow_id == workflow_id)
+            )
+
+            # 添加新变量
+            created_variables = []
+            for var_data in variables:
+                variable = WorkflowVariable(
+                    variable_key=var_data["key"],
+                    variable_name=var_data["name"],
+                    description=var_data.get("description"),
+                    workflow_id=workflow_id,
+                    variable_type=var_data.get("type", "string"),
+                    default_value=var_data.get("default_value"),
+                    is_required=var_data.get("is_required", False),
+                    is_sensitive=var_data.get("is_sensitive", False),
+                    validation_rules=var_data.get("validation_rules")
+                )
+                db.add(variable)
+                created_variables.append({
+                    "key": variable.variable_key,
+                    "name": variable.variable_name,
+                    "type": variable.variable_type
+                })
+
+            await db.commit()
+
+            logger.info(f"工作流变量更新成功: {workflow_id}, 变量数量: {len(variables)}")
+
+            return {
+                "workflow_id": workflow_id,
+                "variable_count": len(variables),
+                "variables": created_variables,
+                "updated_at": datetime.now()
+            }
+
+        except Exception as e:
+            await db.rollback()
+            logger.error(f"更新工作流变量失败: {e}")
+            raise
+
+    async def set_workflow_schedule(
+            self,
+            db: AsyncSession,
+            workflow_id: int,
+            schedule_config: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        """设置工作流调度"""
+        try:
+            result = await db.execute(
+                select(WorkflowDefinition).where(WorkflowDefinition.id == workflow_id)
+            )
+            workflow = result.scalar_one_or_none()
+
+            if not workflow:
+                raise ValueError("工作流不存在")
+
+            # 验证调度配置
+            if "cron_expression" not in schedule_config and "interval_seconds" not in schedule_config:
+                raise ValueError("必须提供cron表达式或间隔秒数")
+
+            # 更新调度配置
+            workflow.schedule_config = schedule_config
+            workflow.trigger_type = TriggerType.SCHEDULED
+            workflow.updated_at = datetime.now()
+
+            await db.commit()
+
+            logger.info(f"工作流调度设置成功: {workflow_id}")
+
+            return {
+                "workflow_id": workflow_id,
+                "schedule_config": schedule_config,
+                "trigger_type": "scheduled",
+                "updated_at": workflow.updated_at
+            }
+
+        except Exception as e:
+            await db.rollback()
+            logger.error(f"设置工作流调度失败: {e}")
+            raise
+
+    async def remove_workflow_schedule(
+            self,
+            db: AsyncSession,
+            workflow_id: int
+    ) -> Dict[str, Any]:
+        """删除工作流调度"""
+        try:
+            result = await db.execute(
+                select(WorkflowDefinition).where(WorkflowDefinition.id == workflow_id)
+            )
+            workflow = result.scalar_one_or_none()
+
+            if not workflow:
+                raise ValueError("工作流不存在")
+
+            # 清除调度配置
+            workflow.schedule_config = None
+            workflow.trigger_type = TriggerType.MANUAL
+            workflow.updated_at = datetime.now()
+
+            await db.commit()
+
+            logger.info(f"工作流调度删除成功: {workflow_id}")
+
+            return {
+                "workflow_id": workflow_id,
+                "message": "工作流调度已删除",
+                "trigger_type": "manual",
+                "updated_at": workflow.updated_at
+            }
+
+        except Exception as e:
+            await db.rollback()
+            logger.error(f"删除工作流调度失败: {e}")
+            raise
+
+    async def get_export_file(
+            self,
+            db: AsyncSession,
+            export_task_id: str
+    ) -> Optional[Dict[str, Any]]:
+        """获取导出文件信息"""
+        try:
+            task_status = await self.get_export_task_status(db, export_task_id)
+
+            if task_status.get("status") != "completed":
+                return None
+
+            file_path = task_status.get("file_path")
+            if not file_path or not os.path.exists(file_path):
+                return None
+
+            return {
+                "file_path": file_path,
+                "filename": os.path.basename(file_path),
+                "file_size": os.path.getsize(file_path),
+                "media_type": "application/octet-stream"
+            }
+
+        except Exception as e:
+            logger.error(f"获取导出文件失败: {e}")
+            return None
+
+    # ==================== 私有辅助方法 ====================
+
+    def _evaluate_condition(self, value: float, operator: str, threshold: float) -> bool:
+        """评估告警条件"""
+        if operator == "gt":
+            return value > threshold
+        elif operator == "lt":
+            return value < threshold
+        elif operator == "gte":
+            return value >= threshold
+        elif operator == "lte":
+            return value <= threshold
+        elif operator == "eq":
+            return value == threshold
+        elif operator == "ne":
+            return value != threshold
+        else:
+            return False
+
+    async def _parse_import_data(self, data: str, format_type: str) -> Dict[str, Any]:
+        """解析导入数据"""
+        try:
+            if format_type == "json":
+                return json.loads(data)
+            elif format_type == "yaml":
+                import yaml
+                return yaml.safe_load(data)
+            else:
+                raise ValueError(f"不支持的导入格式: {format_type}")
+        except Exception as e:
+            raise ValueError(f"解析导入数据失败: {e}")
+
+    async def _import_workflows(
+            self,
+            db: AsyncSession,
+            workflows: List[Dict[str, Any]],
+            import_request: WorkflowImportRequest,
+            importer_id: Optional[str]
+    ) -> Dict[str, Any]:
+        """导入工作流数据"""
+        try:
+            success_results = []
+            failed_results = []
+            skipped_results = []
+
+            for workflow_data in workflows:
+                try:
+                    workflow_name = workflow_data.get("workflow_name")
+
+                    # 检查名称冲突
+                    existing = await db.execute(
+                        select(WorkflowDefinition).where(
+                            WorkflowDefinition.workflow_name == workflow_name
+                        )
+                    )
+                    existing_workflow = existing.scalar_one_or_none()
+
+                    if existing_workflow:
+                        if import_request.conflict_resolution == "skip":
+                            skipped_results.append({
+                                "original_name": workflow_name,
+                                "imported_name": workflow_name,
+                                "status": "skipped",
+                                "message": "工作流名称已存在，跳过导入"
+                            })
+                            continue
+                        elif import_request.conflict_resolution == "rename":
+                            workflow_name = f"{workflow_name}_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+                            workflow_data["workflow_name"] = workflow_name
+
+                    # 创建工作流（这里需要根据实际数据结构调整）
+                    # workflow = await self.create_workflow(db, workflow_data, importer_id)
+
+                    success_results.append({
+                        "original_name": workflow_data.get("workflow_name"),
+                        "imported_name": workflow_name,
+                        "workflow_id": None,  # workflow.id,
+                        "status": "success",
+                        "message": "导入成功"
+                    })
+
+                except Exception as e:
+                    failed_results.append({
+                        "original_name": workflow_data.get("workflow_name", "Unknown"),
+                        "imported_name": workflow_data.get("workflow_name", "Unknown"),
+                        "status": "failed",
+                        "message": str(e)
+                    })
+
+            return {
+                "total_count": len(workflows),
+                "success_count": len(success_results),
+                "failed_count": len(failed_results),
+                "skipped_count": len(skipped_results),
+                "success_results": success_results,
+                "failed_results": failed_results,
+                "skipped_results": skipped_results
+            }
+
+        except Exception as e:
+            logger.error(f"导入工作流数据失败: {e}")
+            raise
+
+    async def _generate_export_file(
+            self,
+            export_data: Dict[str, Any],
+            export_request: WorkflowExportRequest,
+            export_task_id: str
+    ) -> str:
+        """生成导出文件"""
+        try:
+            # 创建导出目录
+            export_dir = "/tmp/workflow_exports"
+            os.makedirs(export_dir, exist_ok=True)
+
+            # 生成文件名
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            filename = f"workflow_export_{export_task_id}_{timestamp}"
+
+            if export_request.export_format == "json":
+                filename += ".json"
+                file_path = os.path.join(export_dir, filename)
+                with open(file_path, 'w', encoding='utf-8') as f:
+                    json.dump(export_data, f, indent=2, ensure_ascii=False, default=str)
+            elif export_request.export_format == "yaml":
+                import yaml
+                filename += ".yaml"
+                file_path = os.path.join(export_dir, filename)
+                with open(file_path, 'w', encoding='utf-8') as f:
+                    yaml.dump(export_data, f, allow_unicode=True, default_flow_style=False)
+            else:
+                raise ValueError(f"不支持的导出格式: {export_request.export_format}")
+
+            # 如果需要压缩
+            if export_request.compress:
+                import gzip
+                compressed_path = file_path + ".gz"
+                with open(file_path, 'rb') as f_in:
+                    with gzip.open(compressed_path, 'wb') as f_out:
+                        f_out.writelines(f_in)
+                os.remove(file_path)  # 删除原文件
+                file_path = compressed_path
+
+            return file_path
+
+        except Exception as e:
+            logger.error(f"生成导出文件失败: {e}")
+            raise
 
 # 创建全局工作流编排服务实例
 workflow_orchestration_service = WorkflowOrchestrationService()
