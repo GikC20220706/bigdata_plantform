@@ -16,6 +16,10 @@ from loguru import logger
 from app.services.datax_service import EnhancedSyncService
 from app.services.optimized_data_integration_service import get_optimized_data_integration_service
 from app.utils.response import create_response
+from app.models.sync_history import SyncHistory, SyncTableHistory
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import select, and_, or_, desc, func
+from app.utils.database import get_async_db
 
 
 class SmartSyncService:
@@ -25,6 +29,148 @@ class SmartSyncService:
         self.datax_service = EnhancedSyncService()
         self.integration_service = get_optimized_data_integration_service()
 
+    async def get_sync_history(
+            self,
+            page: int = 1,
+            page_size: int = 20,
+            status: Optional[str] = None,
+            source_name: Optional[str] = None
+    ) -> Dict[str, Any]:
+        """从数据库获取真实的同步历史记录"""
+        try:
+            # 获取数据库连接
+            async with get_async_db() as db:
+                # 构建查询条件
+                conditions = []
+                if status:
+                    conditions.append(SyncHistory.status == status)
+                if source_name:
+                    conditions.append(SyncHistory.source_name.like(f"%{source_name}%"))
+
+                # 查询总数
+                count_query = select(func.count(SyncHistory.id))
+                if conditions:
+                    count_query = count_query.where(and_(*conditions))
+
+                total_result = await db.execute(count_query)
+                total = total_result.scalar()
+
+                # 分页查询
+                query = select(SyncHistory).order_by(desc(SyncHistory.created_at))
+                if conditions:
+                    query = query.where(and_(*conditions))
+
+                offset = (page - 1) * page_size
+                query = query.offset(offset).limit(page_size)
+
+                result = await db.execute(query)
+                records = result.scalars().all()
+
+                # 构建响应数据
+                history_list = []
+                for record in records:
+                    history_list.append({
+                        "sync_id": record.sync_id,
+                        "source_name": record.source_name,
+                        "target_name": record.target_name,
+                        "status": record.status,
+                        "start_time": record.start_time,
+                        "end_time": record.end_time,
+                        "duration_seconds": record.duration_seconds,
+                        "total_tables": record.total_tables,
+                        "success_tables": record.success_tables,
+                        "failed_tables": record.failed_tables,
+                        "total_records": record.total_records,
+                        "created_by": record.created_by,
+                        "current_step": record.current_step,
+                        "progress": record.progress,
+                        "error_message": record.error_message
+                    })
+
+                return {
+                    "history": history_list,
+                    "total": total,
+                    "page": page,
+                    "page_size": page_size,
+                    "has_more": offset + page_size < total,
+                    "total_pages": (total + page_size - 1) // page_size
+                }
+
+        except Exception as e:
+            logger.error(f"从数据库获取同步历史失败: {e}")
+            return {
+                "history": [],
+                "total": 0,
+                "page": page,
+                "page_size": page_size,
+                "has_more": False,
+                "error": str(e)
+            }
+
+    async def save_sync_history(self, sync_data: Dict[str, Any]) -> bool:
+        """保存同步历史到数据库"""
+        try:
+            async with get_async_db() as db:
+                sync_record = SyncHistory(
+                    sync_id=sync_data.get('sync_id'),
+                    source_name=sync_data.get('source_name'),
+                    target_name=sync_data.get('target_name'),
+                    status=sync_data.get('status', 'running'),
+                    start_time=sync_data.get('start_time'),
+                    end_time=sync_data.get('end_time'),
+                    duration_seconds=sync_data.get('duration_seconds'),
+                    total_tables=sync_data.get('total_tables', 0),
+                    success_tables=sync_data.get('success_tables', 0),
+                    failed_tables=sync_data.get('failed_tables', 0),
+                    total_records=sync_data.get('total_records', 0),
+                    sync_mode=sync_data.get('sync_mode'),
+                    parallel_jobs=sync_data.get('parallel_jobs', 1),
+                    created_by=sync_data.get('created_by'),
+                    error_message=sync_data.get('error_message'),
+                    sync_result=sync_data.get('sync_result'),
+                    current_step=sync_data.get('current_step'),
+                    progress=sync_data.get('progress', 0)
+                )
+
+                db.add(sync_record)
+                await db.commit()
+
+                logger.info(f"同步历史保存成功: {sync_data.get('sync_id')}")
+                return True
+
+        except Exception as e:
+            logger.error(f"保存同步历史失败: {e}")
+            await db.rollback()
+            return False
+
+    async def update_sync_status(self, sync_id: str, status_data: Dict[str, Any]) -> bool:
+        """更新数据库中的同步状态"""
+        try:
+            async with get_async_db() as db:
+                # 查找现有记录
+                result = await db.execute(
+                    select(SyncHistory).where(SyncHistory.sync_id == sync_id)
+                )
+                record = result.scalar_one_or_none()
+
+                if record:
+                    # 更新现有记录
+                    for key, value in status_data.items():
+                        if hasattr(record, key):
+                            setattr(record, key, value)
+                    record.updated_at = datetime.now()
+                else:
+                    # 创建新记录
+                    record = SyncHistory(sync_id=sync_id, **status_data)
+                    db.add(record)
+
+                await db.commit()
+                return True
+
+        except Exception as e:
+            logger.error(f"更新同步状态失败: {e}")
+            await db.rollback()
+            return False
     async def analyze_sync_plan(self, sync_request: Dict[str, Any]) -> Dict[str, Any]:
         """分析同步计划，自动生成同步策略"""
         try:

@@ -344,42 +344,15 @@ async def get_sync_history(
 ):
     """获取智能同步的历史记录"""
     try:
-        # 模拟历史记录数据
-        mock_history = [
-            {
-                "sync_id": f"smart_sync_{1640000000 + i}",
-                "source_name": f"MySQL-{i % 3 + 1}",
-                "target_name": f"Hive-{i % 2 + 1}",
-                "status": ["completed", "failed", "running"][i % 3],
-                "start_time": datetime.now().replace(hour=i % 24, minute=i % 60),
-                "end_time": datetime.now().replace(hour=(i + 1) % 24, minute=(i + 10) % 60) if i % 3 != 2 else None,
-                "total_tables": i % 5 + 1,
-                "success_tables": i % 5 if i % 3 == 0 else (i % 5 + 1) // 2,
-                "total_records": (i + 1) * 10000,
-                "created_by": "用户A" if i % 2 == 0 else "用户B"
-            }
-            for i in range(50)
-        ]
-
-        # 应用过滤条件
-        if status:
-            mock_history = [h for h in mock_history if h['status'] == status]
-        if source_name:
-            mock_history = [h for h in mock_history if source_name.lower() in h['source_name'].lower()]
-
-        # 分页
-        total = len(mock_history)
-        offset = (page - 1) * page_size
-        paginated_history = mock_history[offset:offset + page_size]
+        history_result = await smart_sync_service.get_sync_history(
+            page=page,
+            page_size=page_size,
+            status=status,
+            source_name=source_name
+        )
 
         return create_response(
-            data={
-                "history": paginated_history,
-                "total": total,
-                "page": page,
-                "page_size": page_size,
-                "has_more": offset + page_size < total
-            },
+            data=history_result,
             message="获取同步历史成功"
         )
 
@@ -428,28 +401,34 @@ async def _execute_sync_background(sync_id: str, sync_plan: Dict[str, Any]):
 
 
 async def _update_sync_status(sync_id: str, status_data: Dict[str, Any]):
-    """更新同步状态到缓存"""
+    """更新同步状态到Redis缓存"""
     try:
-        # 这里应该存储到Redis或数据库
-        # 目前使用内存存储（仅用于演示）
-        if not hasattr(_update_sync_status, 'cache'):
-            _update_sync_status.cache = {}
+        from app.utils.cache_service import cache_service
 
-        if sync_id not in _update_sync_status.cache:
-            _update_sync_status.cache[sync_id] = {}
+        # 使用Redis存储状态
+        cache_key = f"smart_sync_status:{sync_id}"
 
-        _update_sync_status.cache[sync_id].update(status_data)
+        # 获取现有状态
+        existing_status = await cache_service.get(cache_key) or {}
+        existing_status.update(status_data)
+
+        # 设置过期时间24小时
+        await cache_service.set(cache_key, existing_status, ttl=86400)
+
+        logger.info(f"同步状态更新成功: {sync_id}")
 
     except Exception as e:
         logger.error(f"更新同步状态失败: {e}")
 
 
 async def _get_sync_status_from_cache(sync_id: str) -> Optional[Dict[str, Any]]:
-    """从缓存获取同步状态"""
+    """从Redis获取同步状态"""
     try:
-        if hasattr(_update_sync_status, 'cache'):
-            return _update_sync_status.cache.get(sync_id)
-        return None
+        from app.utils.cache_service import cache_service
+
+        cache_key = f"smart_sync_status:{sync_id}"
+        return await cache_service.get(cache_key)
+
     except Exception as e:
         logger.error(f"获取同步状态失败: {e}")
         return None

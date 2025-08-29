@@ -25,6 +25,7 @@ from .smart_sync import router as smart_sync_router
 from .scheduler import router as scheduler_router
 from .executor import router as executor_router
 from .monitoring import router as monitoring_router
+from .workflow import router as workflow_router
 
 # Create main API router
 api_router = APIRouter(prefix="/api/v1")
@@ -59,12 +60,12 @@ api_router.include_router(
 )
 
 
-api_router.include_router(
-    sync_router,
-    prefix="/sync",
-    tags=["sync"],
-    responses={404: {"description": "Not found"}}
-)
+# api_router.include_router(
+#     sync_router,
+#     prefix="/sync",
+#     tags=["sync"],
+#     responses={404: {"description": "Not found"}}
+# )
 
 # 新增数据集成路由
 # api_router.include_router(
@@ -114,6 +115,14 @@ api_router.include_router(
     monitoring_router,
     prefix="/monitoring",
     tags=["monitoring", "alerts", "performance"],
+    responses={404: {"description": "Not found"}}
+)
+
+# 在路由注册部分添加
+api_router.include_router(
+    workflow_router,
+    prefix="/workflows",
+    tags=["workflows"],
     responses={404: {"description": "Not found"}}
 )
 

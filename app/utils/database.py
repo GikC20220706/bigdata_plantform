@@ -123,7 +123,7 @@ def create_tables_sync():
             BusinessSystem, BusinessSystemDataSource,
             # 添加新的同步任务模型
             SyncTask, SyncTableMapping, SyncExecution, SyncTableResult,
-            DataSourceMetadata, SyncTemplate
+            DataSourceMetadata, SyncTemplate,SyncHistory, SyncTableHistory
         )
         from sqlalchemy import text
 
