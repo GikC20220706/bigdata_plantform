@@ -65,10 +65,10 @@ class OptimizedDataIntegrationService:
                                 source.source_type,
                                 config
                             )
-                            logger.info(f"✅ 加载已保存的数据源: {source.name}")
+                            logger.info(f"加载已保存的数据源: {source.name}")
                             loaded_count += 1
                     except Exception as e:
-                        logger.error(f"❌ 加载数据源 {source.name} 失败: {e}")
+                        logger.error(f"加载数据源 {source.name} 失败: {e}")
 
                 logger.info(f"成功加载 {loaded_count} 个数据源连接配置")
 

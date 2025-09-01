@@ -26,6 +26,8 @@ from .scheduler import router as scheduler_router
 from .executor import router as executor_router
 from .monitoring import router as monitoring_router
 from .workflow import router as workflow_router
+from .custom_api import router as custom_api_router
+from .api_docs import router as api_docs_router
 
 # Create main API router
 api_router = APIRouter(prefix="/api/v1")
@@ -123,6 +125,20 @@ api_router.include_router(
     workflow_router,
     prefix="/workflows",
     tags=["workflows"],
+    responses={404: {"description": "Not found"}}
+)
+
+api_router.include_router(
+    custom_api_router,
+    prefix="/custom-api",
+    tags=["custom-api", "api-generator", "sql-api"],
+    responses={404: {"description": "Not found"}}
+)
+
+api_router.include_router(
+    api_docs_router,
+    prefix="/api-docs",
+    tags=["api-docs", "documentation", "openapi"],
     responses={404: {"description": "Not found"}}
 )
 

@@ -23,6 +23,7 @@ from .workflow import (
     WorkflowVariable, WorkflowAlert,
     WorkflowStatus, NodeType, NodeStatus, TriggerType
 )
+from .custom_api import CustomAPI, APIParameter, APIAccessLog
 
 # Export all models for easy importing
 __all__ = [
@@ -72,6 +73,10 @@ __all__ = [
     "NodeType",
     "NodeStatus",
     "TriggerType",
+    #Custom API
+    "CustomAPI",
+    "APIParameter",
+    "APIAccessLog",
 ]
 
 
@@ -89,5 +94,5 @@ def get_all_models():
         DataSourceMetadata, SyncTemplate,
         WorkflowDefinition, WorkflowNodeDefinition, WorkflowEdgeDefinition,
         WorkflowExecution, WorkflowNodeExecution, WorkflowTemplate,
-        WorkflowVariable, WorkflowAlert,
+        WorkflowVariable, WorkflowAlert,CustomAPI, APIParameter, APIAccessLog,
     ]
