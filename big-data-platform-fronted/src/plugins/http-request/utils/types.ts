@@ -65,6 +65,7 @@ export interface RequestOptions {
 
 // 接口返回结果
 export interface Result<T = any> {
+  status: number;
   code: number;
   type?: 'success' | 'error' | 'warning';
   message: string;

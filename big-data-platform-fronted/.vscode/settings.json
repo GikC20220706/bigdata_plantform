@@ -1,0 +1,83 @@
+{
+  "folders": [
+    {
+      "path": "."
+    }
+  ],
+  "settings": {
+    // Vue3 + Volar配置
+    "vue.updateImportsOnFileMove.enabled": "always",
+    "vue.codeActions.enabled": true,
+    "vue.complete.casing.tags": "kebab",
+    
+    // TypeScript配置
+    "typescript.suggest.autoImports": true,
+    "typescript.preferences.includePackageJsonAutoImports": "on",
+    "typescript.inlayHints.parameterNames.enabled": "all",
+    
+    // ESLint配置
+    "eslint.validate": [
+      "javascript",
+      "javascriptreact", 
+      "typescript",
+      "vue"
+    ],
+    "eslint.format.enable": true,
+    
+    // Prettier配置
+    "editor.formatOnSave": true,
+    "editor.defaultFormatter": "esbenp.prettier-vscode",
+    "[vue]": {
+      "editor.defaultFormatter": "esbenp.prettier-vscode"
+    },
+    "[typescript]": {
+      "editor.defaultFormatter": "esbenp.prettier-vscode"
+    },
+    "[json]": {
+      "editor.defaultFormatter": "esbenp.prettier-vscode"
+    },
+    
+    // 文件关联
+    "files.associations": {
+      "*.vue": "vue"
+    },
+    
+    // 编辑器配置
+    "editor.tabSize": 4,
+    "editor.insertSpaces": true,
+    "editor.detectIndentation": false,
+    "editor.codeActionsOnSave": {
+      "source.fixAll.eslint": true
+    },
+    
+    // 排除文件
+    "files.exclude": {
+      "**/node_modules": true,
+      "**/dist": true,
+      "**/.git": true
+    },
+    
+    // 搜索排除
+    "search.exclude": {
+      "**/node_modules": true,
+      "**/dist": true
+    },
+    
+    // 监听排除
+    "files.watcherExclude": {
+      "**/node_modules/**": true,
+      "**/dist/**": true
+    }
+  },
+  "extensions": {
+    "recommendations": [
+      "vue.volar",
+      "vue.vscode-typescript-vue-plugin",
+      "dbaeumer.vscode-eslint", 
+      "esbenp.prettier-vscode",
+      "element-plus.vscode-element-plus",
+      "formulahendry.auto-rename-tag",
+      "pmneo.tsimporter"
+    ]
+  }
+}

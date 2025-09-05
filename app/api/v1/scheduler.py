@@ -590,3 +590,348 @@ async def task_status_callback(status_update: TaskStatusUpdate):
     except Exception as e:
         logger.error(f"处理任务状态更新失败: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/overview", summary="调度系统概览 - 增强版")
+async def get_scheduler_overview_enhanced():
+    """获取调度系统概览信息 - 包含统计数据"""
+    try:
+        # 获取Airflow健康状态
+        airflow_health = await airflow_client.health_check()
+
+        # 获取DAG统计
+        dags_result = await airflow_client.get_dags(limit=1000)
+        total_dags = dags_result.get("total_entries", 0)
+
+        active_dags = 0
+        paused_dags = 0
+        for dag in dags_result.get("dags", []):
+            if dag.get("is_paused", True):
+                paused_dags += 1
+            else:
+                active_dags += 1
+
+        # 获取今日任务执行统计
+        today = datetime.now().strftime('%Y-%m-%d')
+        today_stats = await get_daily_task_statistics(today)
+
+        # 获取生成的DAG统计
+        generated_result = await dag_generator_service.list_generated_dags()
+        generated_dags = generated_result.get("total", 0)
+
+        overview_data = {
+            "airflow_status": {
+                "healthy": airflow_health.get("metadatabase", {}).get("status") == "healthy",
+                "scheduler_status": airflow_health.get("scheduler", {}).get("status"),
+                "version": await airflow_client.get_version()
+            },
+            "dag_statistics": {
+                "total_dags": total_dags,
+                "active_dags": active_dags,
+                "paused_dags": paused_dags,
+                "platform_generated_dags": generated_dags
+            },
+            "task_statistics": today_stats,
+            "system_info": {
+                "dag_folder": str(dag_generator_service.dag_folder),
+                "templates_folder": str(dag_generator_service.templates_folder),
+                "last_update": datetime.now().isoformat()
+            }
+        }
+
+        return create_response(
+            data=overview_data,
+            message="获取调度系统概览成功"
+        )
+
+    except Exception as e:
+        logger.error(f"获取调度系统概览失败: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/task-statistics", summary="任务执行统计")
+async def get_task_statistics(
+        date: str = Query(..., description="统计日期 YYYY-MM-DD"),
+        group_by: str = Query("hour", description="分组方式: hour, status")
+):
+    """获取指定日期的任务执行统计"""
+    try:
+        if group_by == "hour":
+            stats = await get_hourly_task_statistics(date)
+        else:
+            stats = await get_daily_task_statistics(date)
+
+        return create_response(
+            data=stats,
+            message="获取任务统计成功"
+        )
+
+    except Exception as e:
+        logger.error(f"获取任务统计失败: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/recent-task-instances", summary="最近的任务实例")
+async def get_recent_task_instances(
+        page: int = Query(1, ge=1),
+        page_size: int = Query(20, ge=1, le=100),
+        search: Optional[str] = Query(None),
+        date: Optional[str] = Query(None)
+):
+    """获取最近的任务实例列表"""
+    try:
+        # 获取所有活跃DAG
+        dags_result = await airflow_client.get_dags(limit=1000)
+        all_task_instances = []
+
+        # 遍历每个DAG获取最近的运行实例
+        for dag in dags_result.get("dags", []):
+            dag_id = dag["dag_id"]
+
+            # 应用搜索过滤
+            if search and search.lower() not in dag_id.lower():
+                continue
+
+            try:
+                # 获取最近的DAG运行
+                dag_runs_result = await airflow_client.get_dag_runs(
+                    dag_id=dag_id,
+                    limit=5,
+                    execution_date_gte=date if date else None
+                )
+
+                # 遍历每个DAG运行获取任务实例
+                for dag_run in dag_runs_result.get("dag_runs", []):
+                    dag_run_id = dag_run["dag_run_id"]
+
+                    try:
+                        tasks_result = await airflow_client.get_task_instances(
+                            dag_id=dag_id,
+                            dag_run_id=dag_run_id
+                        )
+
+                        for task in tasks_result.get("task_instances", []):
+                            task_instance = {
+                                "workflowInstanceId": f"{dag_id}_{dag_run_id}_{task['task_id']}",
+                                "workflowName": f"{dag_id} - {task['task_id']}",
+                                "duration": calculate_task_duration(task),
+                                "startDateTime": task.get("start_date"),
+                                "endDateTime": task.get("end_date"),
+                                "status": map_airflow_task_status(task.get("state", "unknown")),
+                                "lastModifiedBy": dag.get("owners", ["system"])[0] if dag.get("owners") else "system",
+                                "dag_id": dag_id,
+                                "task_id": task["task_id"],
+                                "dag_run_id": dag_run_id
+                            }
+                            all_task_instances.append(task_instance)
+
+                    except Exception as task_error:
+                        logger.warning(f"获取 {dag_id}/{dag_run_id} 的任务实例失败: {task_error}")
+                        continue
+
+            except Exception as dag_error:
+                logger.warning(f"获取 {dag_id} 的运行历史失败: {dag_error}")
+                continue
+
+        # 按开始时间排序
+        all_task_instances.sort(
+            key=lambda x: x["startDateTime"] or "1970-01-01",
+            reverse=True
+        )
+
+        # 分页处理
+        start_idx = (page - 1) * page_size
+        end_idx = start_idx + page_size
+        paginated_tasks = all_task_instances[start_idx:end_idx]
+
+        return create_response(
+            data={
+                "content": paginated_tasks,
+                "totalElements": len(all_task_instances),
+                "currentPage": page,
+                "pageSize": page_size
+            },
+            message="获取任务实例成功"
+        )
+
+    except Exception as e:
+        logger.error(f"获取任务实例失败: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# 辅助函数
+async def get_daily_task_statistics(date: str) -> Dict[str, Any]:
+    """获取指定日期的任务统计"""
+    try:
+        dags_result = await airflow_client.get_dags(limit=1000)
+
+        total_tasks = 0
+        success_tasks = 0
+        failed_tasks = 0
+        running_tasks = 0
+
+        for dag in dags_result.get("dags", []):
+            dag_id = dag["dag_id"]
+
+            try:
+                dag_runs_result = await airflow_client.get_dag_runs(
+                    dag_id=dag_id,
+                    limit=10,
+                    execution_date_gte=date,
+                    execution_date_lte=date
+                )
+
+                for dag_run in dag_runs_result.get("dag_runs", []):
+                    tasks_result = await airflow_client.get_task_instances(
+                        dag_id=dag_id,
+                        dag_run_id=dag_run["dag_run_id"]
+                    )
+
+                    for task in tasks_result.get("task_instances", []):
+                        total_tasks += 1
+                        state = task.get("state", "unknown")
+
+                        if state == "success":
+                            success_tasks += 1
+                        elif state in ["failed", "up_for_failure"]:
+                            failed_tasks += 1
+                        elif state == "running":
+                            running_tasks += 1
+
+            except Exception:
+                continue
+
+        return {
+            "total_tasks": total_tasks,
+            "success_tasks": success_tasks,
+            "failed_tasks": failed_tasks,
+            "running_tasks": running_tasks,
+            "success_rate": round(success_tasks / total_tasks * 100, 1) if total_tasks > 0 else 0
+        }
+
+    except Exception as e:
+        logger.error(f"获取日统计失败: {e}")
+        return {
+            "total_tasks": 0,
+            "success_tasks": 0,
+            "failed_tasks": 0,
+            "running_tasks": 0,
+            "success_rate": 0
+        }
+
+
+async def get_hourly_task_statistics(date: str) -> Dict[str, Any]:
+    """获取指定日期按小时分组的任务统计"""
+    try:
+        hourly_stats = []
+
+        # 初始化24小时数据
+        for hour in range(24):
+            hourly_stats.append({
+                "hour": hour,
+                "time_label": f"{hour:02d}:00",
+                "success_count": 0,
+                "failed_count": 0,
+                "running_count": 0,
+                "total_count": 0
+            })
+
+        # 获取所有DAG的任务数据并按小时统计
+        dags_result = await airflow_client.get_dags(limit=1000)
+
+        for dag in dags_result.get("dags", []):
+            dag_id = dag["dag_id"]
+
+            try:
+                dag_runs_result = await airflow_client.get_dag_runs(
+                    dag_id=dag_id,
+                    limit=10,
+                    execution_date_gte=date,
+                    execution_date_lte=date
+                )
+
+                for dag_run in dag_runs_result.get("dag_runs", []):
+                    tasks_result = await airflow_client.get_task_instances(
+                        dag_id=dag_id,
+                        dag_run_id=dag_run["dag_run_id"]
+                    )
+
+                    for task in tasks_result.get("task_instances", []):
+                        start_date = task.get("start_date")
+                        if start_date:
+                            # 解析小时
+                            task_hour = datetime.fromisoformat(start_date.replace('Z', '+00:00')).hour
+
+                            if 0 <= task_hour <= 23:
+                                state = task.get("state", "unknown")
+                                hourly_stats[task_hour]["total_count"] += 1
+
+                                if state == "success":
+                                    hourly_stats[task_hour]["success_count"] += 1
+                                elif state in ["failed", "up_for_failure"]:
+                                    hourly_stats[task_hour]["failed_count"] += 1
+                                elif state == "running":
+                                    hourly_stats[task_hour]["running_count"] += 1
+
+            except Exception:
+                continue
+
+        return {
+            "instanceNumLine": hourly_stats,
+            "hourly_statistics": hourly_stats,
+            "date": date
+        }
+
+    except Exception as e:
+        logger.error(f"获取小时统计失败: {e}")
+        # 返回空数据
+        return {
+            "instanceNumLine": [
+                {
+                    "hour": hour,
+                    "localTime": f"{hour:02d}:00",
+                    "successNum": 0,
+                    "failNum": 0,
+                    "runningNum": 0
+                } for hour in range(24)
+            ]
+        }
+
+
+def calculate_task_duration(task: Dict[str, Any]) -> int:
+    """计算任务执行时长（秒）"""
+    start_date = task.get("start_date")
+    end_date = task.get("end_date")
+
+    if not start_date:
+        return 0
+
+    try:
+        start = datetime.fromisoformat(start_date.replace('Z', '+00:00'))
+        if end_date:
+            end = datetime.fromisoformat(end_date.replace('Z', '+00:00'))
+        else:
+            end = datetime.now()
+
+        return int((end - start).total_seconds())
+    except:
+        return 0
+
+
+def map_airflow_task_status(airflow_state: str) -> str:
+    """映射Airflow任务状态到前端状态"""
+    status_mapping = {
+        "success": "SUCCESS",
+        "running": "RUNNING",
+        "failed": "FAIL",
+        "up_for_failure": "FAIL",
+        "up_for_retry": "RUNNING",
+        "queued": "PENDING",
+        "scheduled": "PENDING",
+        "none": "PENDING",
+        "skipped": "SUCCESS",
+        "upstream_failed": "FAIL",
+        "removed": "ABORT",
+        "deferred": "PENDING"
+    }
+    return status_mapping.get(airflow_state, "PENDING")

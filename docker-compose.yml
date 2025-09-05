@@ -26,7 +26,7 @@ services:
       --max-connections=200
       --max-allowed-packet=64M
     healthcheck:
-      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "bigdata", "-pbigdata123"]
+      test: [ "CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "bigdata", "-pbigdata123" ]
       interval: 30s
       timeout: 10s
       retries: 5
@@ -53,7 +53,7 @@ services:
       --save 300 10
       --save 60 10000
     healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
+      test: [ "CMD", "redis-cli", "ping" ]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -202,7 +202,7 @@ services:
         condition: service_healthy
 
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8000/api/v1/overview/health"]
+      test: [ "CMD", "curl", "-f", "http://localhost:8000/api/v1/overview/health" ]
       interval: 30s
       timeout: 15s
       retries: 5
@@ -212,11 +212,15 @@ services:
     deploy:
       resources:
         limits:
-          cpus: '16.0'
-          memory: 32G
+          #cpus: '16.0'
+          cpus: '2.0'
+          #memory: 32G
+          memory: 2G
         reservations:
-          cpus: '4.0'
-          memory: 8G
+          #cpus: '4.0'
+          cpus: '0.5'
+          #memory: 8G
+          memory: 512M
 
     networks:
       - bigdata-network
@@ -237,7 +241,7 @@ services:
       bigdata-platform:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost/health"]
+      test: [ "CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost/health" ]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -270,102 +274,16 @@ services:
         tail -f /dev/null
       "
 
+  
 
-
- # Airflow Webserver
-  airflow-webserver:
-    image: apache/airflow:2.8.1
-    container_name: airflow-webserver
-    restart: unless-stopped
-    depends_on:
-      mysql:
-        condition: service_healthy
-      airflow-init:
-        condition: service_completed_successfully
-    environment:
-      AIRFLOW__CORE__EXECUTOR: LocalExecutor
-      # 使用MySQL作为后端数据库
-      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: mysql+pymysql://airflow:airflow123@mysql:3306/airflow_db?charset=utf8mb4
-      AIRFLOW__CORE__SQL_ALCHEMY_CONN: mysql+pymysql://airflow:airflow123@mysql:3306/airflow_db?charset=utf8mb4
-      AIRFLOW__CORE__FERNET_KEY: ''
-      AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: 'true'
-      AIRFLOW__CORE__LOAD_EXAMPLES: 'false'
-      AIRFLOW__API__AUTH_BACKENDS: 'airflow.api.auth.backend.basic_auth,airflow.api.auth.backend.session'
-      AIRFLOW__SCHEDULER__ENABLE_HEALTH_CHECK: 'true'
-      # 数据底座集成配置
-      BIGDATA_PLATFORM_API: http://bigdata-platform:8000
-      BIGDATA_PLATFORM_AUTH: your-auth-token
-      TZ: Asia/Shanghai
-    volumes:
-      - ./airflow/dags:/opt/airflow/dags
-      - ./airflow/logs:/opt/airflow/logs
-      - ./airflow/config:/opt/airflow/config
-      - ./airflow/plugins:/opt/airflow/plugins
-      # 共享DataX和脚本目录
-      - ./datax:/opt/datax:ro
-      - ./scripts:/opt/scripts:ro
-    ports:
-      - "8080:8080"
-    command: webserver
-    healthcheck:
-      test: ["CMD", "curl", "--fail", "http://localhost:8080/health"]
-      interval: 30s
-      timeout: 10s
-      retries: 5
-      start_period: 30s
-    networks:
-      - bigdata-network
-
-  # Airflow Scheduler
-  airflow-scheduler:
-    image: apache/airflow:2.8.1
-    container_name: airflow-scheduler
-    restart: unless-stopped
-    depends_on:
-      mysql:
-        condition: service_healthy
-      airflow-init:
-        condition: service_completed_successfully
-    environment:
-      AIRFLOW__CORE__EXECUTOR: LocalExecutor
-      # 使用MySQL作为后端数据库
-      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: mysql+pymysql://airflow:airflow123@mysql:3306/airflow_db?charset=utf8mb4
-      AIRFLOW__CORE__SQL_ALCHEMY_CONN: mysql+pymysql://airflow:airflow123@mysql:3306/airflow_db?charset=utf8mb4
-      AIRFLOW__CORE__FERNET_KEY: ''
-      AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: 'true'
-      AIRFLOW__CORE__LOAD_EXAMPLES: 'false'
-      AIRFLOW__SCHEDULER__ENABLE_HEALTH_CHECK: 'true'
-      # 数据底座集成配置
-      BIGDATA_PLATFORM_API: http://bigdata-platform:8000
-      TZ: Asia/Shanghai
-    volumes:
-      - ./airflow/dags:/opt/airflow/dags
-      - ./airflow/logs:/opt/airflow/logs
-      - ./airflow/config:/opt/airflow/config
-      - ./airflow/plugins:/opt/airflow/plugins
-      # 共享DataX和脚本目录
-      - ./datax:/opt/datax:ro
-      - ./scripts:/opt/scripts:ro
-    command: scheduler
-    healthcheck:
-      test: ["CMD", "airflow", "jobs", "check", "--job-type", "SchedulerJob"]
-      interval: 30s
-      timeout: 10s
-      retries: 5
-      start_period: 30s
-    networks:
-      - bigdata-network
-
-  # Airflow 初始化
   airflow-init:
-    image: apache/airflow:2.8.1
+    image: bigdata-airflow:latest
     container_name: airflow-init
     depends_on:
       mysql:
         condition: service_healthy
     environment:
       AIRFLOW__CORE__EXECUTOR: LocalExecutor
-      # 使用MySQL作为后端数据库
       AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: mysql+pymysql://airflow:airflow123@mysql:3306/airflow_db?charset=utf8mb4
       AIRFLOW__CORE__SQL_ALCHEMY_CONN: mysql+pymysql://airflow:airflow123@mysql:3306/airflow_db?charset=utf8mb4
       AIRFLOW__CORE__FERNET_KEY: ''
@@ -382,10 +300,118 @@ services:
       - ./airflow/config:/opt/airflow/config
     command: |
       bash -c "
-        pip install pymysql &&
+        echo '=== Airflow 初始化开始 ===' &&
+        echo '验证 MySQL 驱动...' &&
+        python -c 'import pymysql; print(\"✓ PyMySQL 可用\")' &&
+        python -c 'import MySQLdb; print(\"✓ MySQLdb 可用\")' &&
+        echo '测试数据库连接...' &&
+        python -c 'import pymysql; conn = pymysql.connect(host=\"mysql\", user=\"airflow\", password=\"airflow123\", database=\"airflow_db\"); print(\"✓ 数据库连接成功\"); conn.close()' &&
+        echo '初始化 Airflow 数据库...' &&
         airflow db init &&
-        airflow users create --username admin --firstname Admin --lastname User --role Admin --email admin@example.com --password admin
+        echo '创建管理员用户...' &&
+        airflow users create --username admin --firstname Admin --lastname User --role Admin --email admin@example.com --password admin &&
+        echo '=== Airflow 初始化完成 ==='
       "
+    networks:
+      - bigdata-network
+
+    # Airflow Webserver - 生产优化配置
+  airflow-webserver:
+    image: bigdata-airflow:latest
+    container_name: airflow-webserver
+    restart: unless-stopped
+    depends_on:
+      mysql:
+        condition: service_healthy
+      airflow-init:
+        condition: service_completed_successfully
+    environment:
+      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: mysql+pymysql://airflow:airflow123@mysql:3306/airflow_db?charset=utf8mb4
+      AIRFLOW__CORE__LOAD_EXAMPLES: false
+      AIRFLOW__CORE__FERNET_KEY: ''
+      DEPLOYMENT_ENV: ${DEPLOYMENT_ENV:-development}
+      TZ: Asia/Shanghai
+    volumes:
+      - ./airflow/dags:/opt/airflow/dags
+      - ./airflow/logs:/opt/airflow/logs
+    ports:
+      - "8080:8080"
+    command: >
+      bash -c "
+        if [ \"\$DEPLOYMENT_ENV\" = \"production\" ]; then
+          echo '=== 生产环境：启动 Gunicorn webserver ===' &&
+          airflow webserver --port 8080 --workers 4 --timeout 600
+        else
+          echo '=== 开发环境：启动 Flask 开发服务器 ===' &&
+          airflow webserver --port 8080 --debug
+        fi
+      "
+    healthcheck:
+      test: [ "CMD-SHELL", "curl -f http://localhost:8080/health || exit 1" ]
+      interval: 60s
+      timeout: 30s
+      retries: 3
+      start_period: 120s
+    networks:
+      - bigdata-network
+  airflow-scheduler:
+    image: bigdata-airflow:latest
+    container_name: airflow-scheduler
+    restart: unless-stopped
+    depends_on:
+      mysql:
+        condition: service_healthy
+      airflow-init:
+        condition: service_completed_successfully
+    environment:
+      AIRFLOW__CORE__EXECUTOR: LocalExecutor
+      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: mysql+pymysql://airflow:airflow123@mysql:3306/airflow_db?charset=utf8mb4
+      AIRFLOW__CORE__SQL_ALCHEMY_CONN: mysql+pymysql://airflow:airflow123@mysql:3306/airflow_db?charset=utf8mb4
+      AIRFLOW__CORE__FERNET_KEY: ''
+      AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: 'true'
+      AIRFLOW__CORE__LOAD_EXAMPLES: 'false'
+      AIRFLOW__SCHEDULER__ENABLE_HEALTH_CHECK: 'true'
+      # Scheduler 优化配置
+      AIRFLOW__SCHEDULER__HEARTBEAT_SEC: 5
+      AIRFLOW__SCHEDULER__MAX_THREADS: 2
+      AIRFLOW__SCHEDULER__CATCHUP_BY_DEFAULT: 'false'
+      AIRFLOW__SCHEDULER__DAG_DIR_LIST_INTERVAL: 300
+      # 数据库连接池优化
+      AIRFLOW__DATABASE__SQL_ALCHEMY_POOL_SIZE: 5
+      AIRFLOW__DATABASE__SQL_ALCHEMY_POOL_RECYCLE: 3600
+      AIRFLOW__DATABASE__SQL_ALCHEMY_POOL_PRE_PING: 'true'
+      # 数据底座集成配置
+      BIGDATA_PLATFORM_API: http://bigdata-platform:8000
+      TZ: Asia/Shanghai
+    volumes:
+      - ./airflow/dags:/opt/airflow/dags
+      - ./airflow/logs:/opt/airflow/logs
+      - ./airflow/config:/opt/airflow/config
+      - ./airflow/plugins:/opt/airflow/plugins
+      - ./datax:/opt/datax:ro
+      - ./scripts:/opt/scripts:ro
+    command: >
+      bash -c "
+        echo '=== 启动 Airflow Scheduler ===' &&
+        echo '等待 webserver 就绪...' &&
+        sleep 30 &&
+        echo '启动 scheduler...' &&
+        airflow scheduler
+      "
+    healthcheck:
+      test: [ "CMD", "airflow", "jobs", "check", "--job-type", "SchedulerJob", "--hostname", "$(hostname)" ]
+      interval: 60s
+      timeout: 20s
+      retries: 3
+      start_period: 120s
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 2G
+        reservations:
+          cpus: '0.25'
+          memory: 512M
     networks:
       - bigdata-network
 # 数据卷 - 修正格式
