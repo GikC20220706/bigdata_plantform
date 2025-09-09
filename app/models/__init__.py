@@ -16,6 +16,8 @@ from .sync_task import (
     SyncTask, SyncTableMapping, SyncExecution, SyncTableResult,
     DataSourceMetadata, SyncTemplate
 )
+# 添加计算集群
+from .user_cluster import UserCluster, ClusterType, ClusterStatus
 # 工作流编排相关模型
 from .workflow import (
     WorkflowDefinition, WorkflowNodeDefinition, WorkflowEdgeDefinition,
@@ -36,6 +38,7 @@ __all__ = [
     "Cluster",
     "ClusterNode",
     "ClusterMetric",
+    "UserCluster",
 
     # Data source models
     "DataSource",
@@ -94,5 +97,5 @@ def get_all_models():
         DataSourceMetadata, SyncTemplate,
         WorkflowDefinition, WorkflowNodeDefinition, WorkflowEdgeDefinition,
         WorkflowExecution, WorkflowNodeExecution, WorkflowTemplate,
-        WorkflowVariable, WorkflowAlert,CustomAPI, APIParameter, APIAccessLog,
+        WorkflowVariable, WorkflowAlert,CustomAPI, APIParameter, APIAccessLog,UserCluster
     ]
