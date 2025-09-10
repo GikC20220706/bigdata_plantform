@@ -26,6 +26,7 @@ from .workflow import (
     WorkflowStatus, NodeType, NodeStatus, TriggerType
 )
 from .custom_api import CustomAPI, APIParameter, APIAccessLog
+from .sync_history import SyncHistory, SyncTableHistory
 
 # Export all models for easy importing
 __all__ = [
@@ -80,6 +81,9 @@ __all__ = [
     "CustomAPI",
     "APIParameter",
     "APIAccessLog",
+
+    "SyncHistory",        # 添加这一行
+    "SyncTableHistory",
 ]
 
 
@@ -97,5 +101,5 @@ def get_all_models():
         DataSourceMetadata, SyncTemplate,
         WorkflowDefinition, WorkflowNodeDefinition, WorkflowEdgeDefinition,
         WorkflowExecution, WorkflowNodeExecution, WorkflowTemplate,
-        WorkflowVariable, WorkflowAlert,CustomAPI, APIParameter, APIAccessLog,UserCluster
+        WorkflowVariable, WorkflowAlert,CustomAPI, APIParameter, APIAccessLog,UserCluster,SyncHistory, SyncTableHistory,
     ]

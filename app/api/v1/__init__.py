@@ -51,7 +51,7 @@ api_router.include_router(
 api_router.include_router(
     user_cluster_router,
     prefix="/user-cluster",
-    tags=["user-cluster", "compute-cluster-management"],
+    tags=["计算集群"],
     responses={404: {"description": "Not found"}}
 )
 
@@ -109,7 +109,7 @@ api_router.include_router(
 api_router.include_router(
     scheduler_router,
     prefix="/scheduler",
-    tags=["scheduler", "airflow", "dag-management"],
+    tags=["调度管理"],
     responses={404: {"description": "Not found"}}
 )
 
@@ -117,14 +117,14 @@ api_router.include_router(
 api_router.include_router(
     executor_router,
     prefix="/executor",
-    tags=["executor", "task-execution", "sql", "shell", "datax"],
+    tags=["执行期管理"],
     responses={404: {"description": "Not found"}}
 )
 
 api_router.include_router(
     monitoring_router,
     prefix="/monitoring",
-    tags=["monitoring", "alerts", "performance"],
+    tags=["监控告警"],
     responses={404: {"description": "Not found"}}
 )
 
@@ -139,14 +139,14 @@ api_router.include_router(
 api_router.include_router(
     custom_api_router,
     prefix="/custom-api",
-    tags=["custom-api", "api-generator", "sql-api"],
+    tags=["自定义API"],
     responses={404: {"description": "Not found"}}
 )
 
 api_router.include_router(
     api_docs_router,
     prefix="/api-docs",
-    tags=["api-docs", "documentation", "openapi"],
+    tags=["API文档生成"],
     responses={404: {"description": "Not found"}}
 )
 

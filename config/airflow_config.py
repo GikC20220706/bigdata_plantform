@@ -5,8 +5,9 @@ Airflow集成配置
 
 import os
 from pathlib import Path
-from pydantic import BaseSettings, Field
-from typing import Optional, Dict, Any
+from pydantic import Field
+from pydantic_settings import BaseSettings
+from typing import Optional, Dict, Any, ClassVar
 
 
 class AirflowConfig(BaseSettings):
@@ -52,36 +53,36 @@ class AirflowConfig(BaseSettings):
     BIGDATA_PLATFORM_AUTH_TOKEN: Optional[str] = Field(default=None, env="BIGDATA_PLATFORM_AUTH_TOKEN")
 
     # 任务分类配置
-    TASK_CATEGORIES = {
+    TASK_CATEGORIES: ClassVar[Dict[str, Dict[str, str]]] = {
         "etl": {
             "display_name": "ETL数据处理",
             "color": "#1890ff",
-            "icon": "⚙️"
+            "icon": ""
         },
         "sync": {
             "display_name": "数据同步",
             "color": "#52c41a",
-            "icon": "🔄"
+            "icon": ""
         },
         "sql": {
             "display_name": "SQL查询",
             "color": "#722ed1",
-            "icon": "🗃️"
+            "icon": ""
         },
         "shell": {
             "display_name": "Shell脚本",
             "color": "#fa541c",
-            "icon": "🐚"
+            "icon": ""
         },
         "datax": {
             "display_name": "DataX任务",
             "color": "#13c2c2",
-            "icon": "📊"
+            "icon": ""
         }
     }
 
     # DAG默认参数
-    DEFAULT_DAG_ARGS = {
+    DEFAULT_DAG_ARGS: ClassVar[Dict[str, Any]] = {
         'owner': 'bigdata-platform',
         'depends_on_past': False,
         'email_on_failure': True,
@@ -142,6 +143,7 @@ class AirflowConfig(BaseSettings):
     class Config:
         env_file = ".env"
         env_file_encoding = "utf-8"
+        extra = "ignore"
 
 
 # 创建全局配置实例

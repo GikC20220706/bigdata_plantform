@@ -223,12 +223,13 @@ async def test_dependencies():
 
     # Test database connection
     try:
-        from app.utils.database import get_async_db
+        from app.utils.database import test_connection
 
         # Test database connection
-        db = next(get_async_db())
-        db.close()
-        logger.info("Database connection test passed")
+        if test_connection():
+            logger.info("Database connection test passed")
+        else:
+            logger.warning("Database connection test failed")
     except Exception as e:
         logger.warning(f"Database connection test failed: {e}")
 

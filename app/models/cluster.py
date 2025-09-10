@@ -77,7 +77,7 @@ class Cluster(BaseModel):
 
     # 关联关系
     nodes = relationship("ClusterNode", back_populates="cluster",
-                         cascade="all, delete-orphan", lazy="selectinload")
+                         cascade="all, delete-orphan", lazy="select")
     metrics = relationship("ClusterMetric", back_populates="cluster",
                            cascade="all, delete-orphan")
     operations = relationship("ClusterOperation", back_populates="cluster",

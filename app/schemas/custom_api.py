@@ -4,7 +4,7 @@
 
 from datetime import datetime
 from typing import List, Optional, Dict, Any, Union
-from pydantic import BaseModel, Field, validator
+from pydantic import BaseModel, Field, field_validator
 from enum import Enum
 
 
@@ -30,14 +30,14 @@ class ParameterType(str, Enum):
 
 class APIParameterCreate(BaseModel):
     """创建API参数的请求模式"""
-    param_name: str = Field(..., regex="^[a-zA-Z_][a-zA-Z0-9_]*$", min_length=1, max_length=50, description="参数名称")
+    param_name: str = Field(..., pattern="^[a-zA-Z_][a-zA-Z0-9_]*$", min_length=1, max_length=50, description="参数名称")
     param_type: ParameterType = Field(..., description="参数类型")
     is_required: bool = Field(False, description="是否必填参数")
     default_value: Optional[str] = Field(None, max_length=200, description="默认值")
     description: Optional[str] = Field(None, max_length=500, description="参数描述")
     validation_rule: Optional[Dict[str, Any]] = Field(None, description="参数验证规则")
 
-    @validator('default_value')
+    @field_validator('default_value')
     def validate_default_value(cls, v, values):
         """验证默认值与参数类型匹配"""
         if v is None:
@@ -63,8 +63,8 @@ class APIParameterCreate(BaseModel):
 
 class CreateAPIRequest(BaseModel):
     """创建自定义API的请求模式"""
-    api_name: str = Field(..., min_length=1, max_length=100, regex="^[a-zA-Z_][a-zA-Z0-9_]*$", description="API名称")
-    api_path: str = Field(..., regex="^/api/custom/[a-zA-Z0-9_/-]+$", max_length=200, description="API路径")
+    api_name: str = Field(..., min_length=1, max_length=100, pattern="^[a-zA-Z_][a-zA-Z0-9_]*$", description="API名称")
+    api_path: str = Field(..., pattern="^/api/custom/[a-zA-Z0-9_/-]+$", max_length=200, description="API路径")
     description: Optional[str] = Field(None, max_length=1000, description="API描述")
     data_source_id: int = Field(..., gt=0, description="数据源ID")
     sql_template: str = Field(..., min_length=10, description="SQL查询模板")
@@ -74,7 +74,7 @@ class CreateAPIRequest(BaseModel):
     rate_limit: int = Field(100, ge=1, le=10000, description="频率限制(次/分钟)")
     parameters: List[APIParameterCreate] = Field([], description="API参数列表")
 
-    @validator('sql_template')
+    @field_validator('sql_template')
     def validate_sql_template(cls, v):
         """验证SQL模板安全性"""
         if not v or not v.strip():
@@ -100,7 +100,7 @@ class CreateAPIRequest(BaseModel):
 
         return v.strip()
 
-    @validator('api_path')
+    @field_validator('api_path')
     def validate_api_path(cls, v):
         """验证API路径格式"""
         if not v.startswith('/api/custom/'):
@@ -124,7 +124,7 @@ class UpdateAPIRequest(BaseModel):
     is_active: Optional[bool] = Field(None, description="是否激活")
     parameters: Optional[List[APIParameterCreate]] = Field(None, description="API参数列表")
 
-    @validator('sql_template')
+    @field_validator('sql_template')
     def validate_sql_template(cls, v):
         """验证SQL模板"""
         if v is not None:

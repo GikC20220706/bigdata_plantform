@@ -15,9 +15,6 @@ from .sql_executor import sql_executor
 from .shell_executor import shell_executor
 from .datax_executor import datax_executor
 
-# 导入执行器服务
-from app.services.executor_service import executor_service
-
 __all__ = [
     "BaseExecutor",
     "ExecutionContext",
@@ -27,7 +24,6 @@ __all__ = [
     "sql_executor",
     "shell_executor",
     "datax_executor",
-    "executor_service"
 ]
 
 

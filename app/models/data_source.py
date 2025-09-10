@@ -38,6 +38,7 @@ class DataSource(BaseModel):
 
     # 关系
     connections = relationship("DataSourceConnection", back_populates="data_source", cascade="all, delete-orphan")
+    custom_apis = relationship("CustomAPI", back_populates="data_source", cascade="all, delete-orphan")
 
 
 class DataSourceConnection(BaseModel):

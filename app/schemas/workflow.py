@@ -4,9 +4,9 @@
 """
 
 from datetime import datetime
-from typing import Dict, List, Optional, Any, Union
-from pydantic import BaseModel, Field, field_validator, root_field_validator, field_field_validator
 from enum import Enum
+from typing import Dict, List, Optional, Any, Union
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 
 # ==================== 枚举定义 ====================
@@ -246,7 +246,7 @@ class WorkflowNodeRequest(BaseModel):
             raise ValueError('节点ID只能包含字母、数字、下划线和短横线')
         return v
 
-    @root_field_validator
+    @model_validator(mode='before')
     def validate_node_config(cls, values):
         node_type = values.get('node_type')
         task_config = values.get('task_config')
@@ -284,7 +284,7 @@ class WorkflowEdgeRequest(BaseModel):
             raise ValueError('边ID只能包含字母、数字、下划线和短横线')
         return v
 
-    @field_field_validator('condition_expression')
+    @field_validator('condition_expression')
     def validate_condition_expression(cls, v, values):
         condition_type = values.get('condition_type')
         if condition_type == ConditionType.CUSTOM and not v:

@@ -88,18 +88,18 @@ async def lifespan(app: FastAPI):
     try:
         config_validation = validate_monitoring_config()
         if config_validation["valid"]:
-            logger.info("✅ 监控配置验证通过")
+            logger.info("监控配置验证通过")
         else:
-            logger.warning(f"⚠️ 监控配置验证有问题: {config_validation['errors']}")
+            logger.warning(f"监控配置验证有问题: {config_validation['errors']}")
     except Exception as e:
         logger.warning(f"监控配置验证失败: {e}")
 
     # 🆕 初始化监控告警系统
     try:
         await monitoring_startup_event()
-        logger.info("✅ 监控告警系统初始化完成")
+        logger.info("监控告警系统初始化完成")
     except Exception as e:
-        logger.error(f"❌ 监控告警系统初始化失败: {e}")
+        logger.error(f"监控告警系统初始化失败: {e}")
 
         # 初始化优化的数据集成服务
     try:
@@ -155,9 +155,9 @@ async def lifespan(app: FastAPI):
     # Clear metrics cache
     try:
         await monitoring_shutdown_event()
-        logger.info("✅ 监控告警系统已关闭")
+        logger.info("监控告警系统已关闭")
     except Exception as e:
-        logger.error(f"❌ 监控告警系统关闭异常: {e}")
+        logger.error(f"监控告警系统关闭异常: {e}")
     try:
         from app.utils.metrics_collector import metrics_collector
         metrics_collector.clear_cache()
@@ -350,17 +350,6 @@ def setup_routers(app: FastAPI) -> None:
     # Include main API router
     app.include_router(api_router)
 
-    # 🆕 监控告警路由
-    try:
-        from app.api.v1.monitoring import router as monitoring_router
-        app.include_router(
-            monitoring_router,
-            prefix="/api/v1/monitoring",
-            tags=["monitoring", "alerts", "performance"]
-        )
-        logger.info("监控告警路由已加载")
-    except ImportError as e:
-        logger.warning(f"监控告警路由加载失败: {e}")
 
     @app.get("/docs", include_in_schema=False)
     async def custom_swagger_ui_html():
