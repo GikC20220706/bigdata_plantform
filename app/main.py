@@ -26,12 +26,13 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from loguru import logger
 import uvicorn
-from app.services.monitoring_integration import (
-    monitoring_startup_event,
-    monitoring_shutdown_event,
-    monitoring_integration,
-    validate_monitoring_config
-)
+# from app.services.monitoring_integration import (
+#     monitoring_startup_event,
+#     monitoring_shutdown_event,
+#     monitoring_integration,
+#     validate_monitoring_config
+# )
+from app.services.monitoring_integration import monitoring_integration, validate_monitoring_config, monitoring_shutdown_event
 
 # Add project root to Python path
 project_root = Path(__file__).parent.parent
@@ -96,7 +97,11 @@ async def lifespan(app: FastAPI):
 
     # 🆕 初始化监控告警系统
     try:
-        await monitoring_startup_event()
+        # 先导入 executor_service
+        from app.services.executor_service import executor_service
+
+        # 直接初始化，不使用 monitoring_startup_event
+        await monitoring_integration.initialize(executor_service)
         logger.info("监控告警系统初始化完成")
     except Exception as e:
         logger.error(f"监控告警系统初始化失败: {e}")
@@ -529,7 +534,7 @@ app = create_app()
 
 # Development server runner
 if __name__ == "__main__":
-    logger.info("🚀 Starting development server...")
+    logger.info("Starting development server...")
 
     uvicorn.run(
         "app.main:app",

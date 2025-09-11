@@ -156,8 +156,6 @@ services:
       - JAVA_OPTS=-Xss8m -Xms4g -Xmx16g -Dfastjson.parser.safeMode=true -Dfastjson2.parser.safeMode=true
       - DATAX_JVM_OPTS=-Xss8m -Xms4g -Xmx16g -Dfastjson.parser.safeMode=true
 
-      - ./airflow/dags:/app/airflow/dags:rw
-      - ./airflow/dag_templates:/app/airflow/dag_templates:rw
 
       # FastJSON 安全配置
       #- FASTJSON_PARSER_SAFEMODE=true
@@ -197,6 +195,8 @@ services:
       - /etc/hosts:/etc/hosts:ro
       # 添加离线swagger ui
       - ./static:/app/static:ro
+      - ./airflow/dags:/opt/airflow/dags:rw
+      - ./airflow/dag_templates:/opt/airflow/dag_templates:rw
 
     depends_on:
       mysql:

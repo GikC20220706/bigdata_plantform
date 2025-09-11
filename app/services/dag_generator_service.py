@@ -427,7 +427,7 @@ dag = DAG(
     default_args=default_args,
     description='{{ description }}',
     schedule_interval='{{ schedule.schedule_interval }}' if '{{ schedule.schedule_interval }}' != 'None' else None,
-    catchup={{ schedule.catchup|lower }},
+    catchup={{ "True" if schedule.catchup else "False" }},
     max_active_runs={{ schedule.max_active_runs }},
     max_active_tasks={{ schedule.max_active_tasks }},
     tags=['sql', 'bigdata-platform', '{{ task_type }}']
@@ -501,7 +501,7 @@ dag = DAG(
     default_args=default_args,
     description='{{ description }}',
     schedule_interval='{{ schedule.schedule_interval }}' if '{{ schedule.schedule_interval }}' != 'None' else None,
-    catchup={{ schedule.catchup|lower }},
+    catchup={{ "True" if schedule.catchup else "False" }},
     max_active_runs={{ schedule.max_active_runs }},
     max_active_tasks={{ schedule.max_active_tasks }},
     tags=['shell', 'bigdata-platform', '{{ task_type }}']
@@ -577,7 +577,7 @@ dag = DAG(
     default_args=default_args,
     description='{{ description }}',
     schedule_interval='{{ schedule.schedule_interval }}' if '{{ schedule.schedule_interval }}' != 'None' else None,
-    catchup={{ schedule.catchup|lower }},
+    catchup={{ "True" if schedule.catchup else "False" }},
     max_active_runs={{ schedule.max_active_runs }},
     max_active_tasks={{ schedule.max_active_tasks }},
     tags=['datax', 'sync', 'bigdata-platform']
@@ -667,7 +667,7 @@ dag = DAG(
     default_args=default_args,
     description='{{ description }}',
     schedule_interval='{{ schedule.schedule_interval }}' if '{{ schedule.schedule_interval }}' != 'None' else None,
-    catchup={{ schedule.catchup|lower }},
+    catchup={{ "True" if schedule.catchup else "False" }},
     max_active_runs={{ schedule.max_active_runs }},
     max_active_tasks={{ schedule.max_active_tasks }},
     tags=['multi-task', 'bigdata-platform', 'workflow']

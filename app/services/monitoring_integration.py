@@ -9,7 +9,10 @@ from typing import Dict, Any, Optional
 from loguru import logger
 
 from app.services.monitoring_service import monitoring_service
-from app.services.executor_service import ExecutorService
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from app.services.executor_service import ExecutorService
 from app.services.smart_sync_service import SmartSyncService
 from app.services.dag_generator_service import dag_generator_service
 
@@ -19,11 +22,11 @@ class MonitoringIntegration:
 
     def __init__(self):
         self.monitoring_service = monitoring_service
-        self.executor_service: Optional[ExecutorService] = None
+        self.executor_service: Optional['ExecutorService'] = None
         self.sync_service: Optional[SmartSyncService] = None
         self.initialized = False
 
-    async def initialize(self, executor_service: ExecutorService, sync_service: SmartSyncService = None):
+    async def initialize(self, executor_service: 'ExecutorService', sync_service: 'SmartSyncService' = None):
         """初始化监控集成"""
         try:
             self.executor_service = executor_service
@@ -246,14 +249,11 @@ monitoring_integration = MonitoringIntegration()
 
 # ==================== 启动时集成函数 ====================
 
-async def setup_monitoring_integration():
-    """
-    设置监控集成
-    在应用启动时调用此函数
-    """
+async def setup_monitoring_integration(executor_service=None):
+    """设置监控集成"""
     try:
-        # 导入必要的服务
-        from app.services.executor_service import executor_service
+        if executor_service is None:
+            raise ValueError("executor_service 参数不能为空")
 
         # 尝试导入智能同步服务
         try:
@@ -276,21 +276,17 @@ async def setup_monitoring_integration():
 
 # ==================== FastAPI应用事件处理器 ====================
 
-async def monitoring_startup_event():
-    """
-    应用启动时的监控初始化事件处理器
-    在main.py中的startup事件中调用
-    """
+async def monitoring_startup_event(executor_service=None):
+    """应用启动时的监控初始化事件处理器"""
     try:
         logger.info("开始初始化监控告警系统...")
 
-        # 设置监控集成
-        success = await setup_monitoring_integration()
+        if executor_service is None:
+            raise ValueError("executor_service 参数不能为空")
 
-        if success:
-            logger.info("✅ 监控告警系统初始化成功")
-        else:
-            logger.error("❌ 监控告警系统初始化失败")
+        # 直接使用传入的 executor_service
+        await monitoring_integration.initialize(executor_service)
+        logger.info("监控告警系统初始化成功")
 
     except Exception as e:
         logger.error(f"监控启动事件处理失败: {e}")

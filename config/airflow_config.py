@@ -31,8 +31,8 @@ class AirflowConfig(BaseSettings):
     AIRFLOW_WEB_URL: str = Field(default="http://airflow-webserver:8080", env="AIRFLOW_WEB_URL")
 
     # DAG配置
-    DAG_FOLDER: str = Field(default="./airflow/dags", env="DAG_FOLDER")
-    DAG_TEMPLATES_FOLDER: str = Field(default="./airflow/dag_templates", env="DAG_TEMPLATES_FOLDER")
+    DAG_FOLDER: str = Field(default="/opt/airflow/dags", env="DAG_FOLDER")
+    DAG_TEMPLATES_FOLDER: str = Field(default="/opt/airflow/dag_templates", env="DAG_TEMPLATES_FOLDER")
 
     # 任务执行配置
     DEFAULT_TASK_TIMEOUT: int = Field(default=3600, env="DEFAULT_TASK_TIMEOUT")  # 1小时

@@ -20,7 +20,11 @@ import psutil
 from loguru import logger
 
 from app.executors.base_executor import ExecutionStatus, ExecutionResult
-from app.services.executor_service import ExecutorService
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from app.services.executor_service import ExecutorService
+
 from app.utils.airflow_client import airflow_client
 from config.settings import settings
 
@@ -110,7 +114,7 @@ class MonitoringService:
     """监控告警服务"""
 
     def __init__(self):
-        self.executor_service: ExecutorService = None
+        self.executor_service: 'ExecutorService' = None
         self.redis_client: Optional[aioredis.Redis] = None
 
         # 告警规则和历史
@@ -153,7 +157,7 @@ class MonitoringService:
 
         logger.info("监控告警服务初始化完成")
 
-    async def initialize(self, executor_service: ExecutorService):
+    async def initialize(self, executor_service: 'ExecutorService'):
         """初始化监控服务"""
         self.executor_service = executor_service
 
@@ -543,7 +547,7 @@ class MonitoringService:
                 "msgtype": "markdown",
                 "markdown": {
                     "title": f"告警通知 - {alert.title}",
-                    "text": f"""## 🚨 告警通知
+                    "text": f"""## 告警通知
 
 **告警标题:** {alert.title}
 
@@ -1092,7 +1096,7 @@ class MonitoringService:
         </head>
         <body>
             <div class="header">
-                <h1>🚨 告警通知</h1>
+                <h1>告警通知</h1>
                 <h2>{alert.title}</h2>
             </div>
 

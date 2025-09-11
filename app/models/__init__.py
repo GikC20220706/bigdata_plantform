@@ -8,6 +8,7 @@ organized by domain area (clusters, data sources, tasks, etc.).
 
 from .base import Base, BaseModel, TimestampMixin
 from .cluster import Cluster, ClusterNode, ClusterMetric
+from .custom_api import CustomAPI, APIParameter, APIAccessLog
 from .data_source import DataSource, DataSourceConnection
 from .task import TaskDefinition, TaskExecution, TaskSchedule
 from .business_system import BusinessSystem, BusinessSystemDataSource
@@ -25,7 +26,6 @@ from .workflow import (
     WorkflowVariable, WorkflowAlert,
     WorkflowStatus, NodeType, NodeStatus, TriggerType
 )
-from .custom_api import CustomAPI, APIParameter, APIAccessLog
 from .sync_history import SyncHistory, SyncTableHistory
 
 # Export all models for easy importing
