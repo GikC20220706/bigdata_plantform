@@ -340,26 +340,34 @@ class DAGGeneratorService:
         return template.render(**params)
 
     def _write_dag_file(self, dag_id: str, content: str) -> Path:
-        """写入DAG文件"""
+        """写入DAG文件并确保Airflow能访问"""
         dag_file_path = self.generated_folder / f"{dag_id}.py"
 
         # 添加文件头注释
         header = f'''"""
-自动生成的Airflow DAG文件
-DAG ID: {dag_id}
-生成时间: {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}
-生成器: 数据底座DAG生成服务
+    自动生成的Airflow DAG文件
+    DAG ID: {dag_id}
+    生成时间: {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}
+    生成器: 数据底座DAG生成服务
 
-警告: 此文件由系统自动生成，请勿手动修改！
-如需修改，请通过数据底座平台的调度管理界面进行。
-"""
+    警告: 此文件由系统自动生成，请勿手动修改！
+    如需修改，请通过数据底座平台的调度管理界面进行。
+    """
 
-'''
+    '''
 
         full_content = header + content
+
+        # 写入到generated子目录
         dag_file_path.write_text(full_content, encoding='utf-8')
 
+        # 同时复制到Airflow能访问的主DAG目录
+        main_dag_path = self.dag_folder / f"{dag_id}.py"
+        main_dag_path.write_text(full_content, encoding='utf-8')
+
         logger.info(f"DAG文件已生成: {dag_file_path}")
+        logger.info(f"DAG文件已同步到Airflow目录: {main_dag_path}")
+
         return dag_file_path
 
     async def _validate_generated_dag(self, dag_file_path: Path) -> Dict[str, Any]:

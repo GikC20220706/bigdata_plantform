@@ -18,6 +18,9 @@ class ClusterType(str, Enum):
     KUBERNETES = "kubernetes"
     YARN = "yarn"
     STANDALONE = "standalone"
+    DORIS = "doris"
+    HADOOP = "hadoop"
+    FLINK = "flink"
 
 
 class ClusterStatus(str, Enum):

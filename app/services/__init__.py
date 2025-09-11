@@ -10,6 +10,7 @@ from .cluster_service import ClusterService
 from .hdfs_service import HDFSService
 from .hive_service import HiveService
 from .task_service import TaskService
+from .executor_service import ExecutorService, executor_service
 
 __all__ = [
     "EnhancedOverviewService",
@@ -17,4 +18,6 @@ __all__ = [
     "HDFSService",
     "HiveService",
     "TaskService",
+    "ExecutorService",
+    "executor_service",
 ]
