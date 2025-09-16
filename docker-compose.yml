@@ -79,7 +79,8 @@ services:
 
       # 数据库配置
       - DATABASE_URL=mysql+aiomysql://bigdata:bigdata123@mysql:3306/bigdata_platform?charset=utf8mb4
-
+      - DAG_FOLDER=/opt/airflow/dags
+      - DAG_TEMPLATES_FOLDER=/opt/airflow/dag_templates
       # Redis配置
       - REDIS_URL=redis://redis:6379/0
       - REDIS_HOST=redis

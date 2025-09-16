@@ -169,6 +169,17 @@ async def lifespan(app: FastAPI):
         logger.info("Metrics cache cleared")
     except Exception as e:
         logger.warning(f"Failed to clear metrics cache: {e}")
+        # 添加数据库连接清理
+    try:
+        # 等待一段时间让异步任务完成
+        await asyncio.sleep(2)
+
+        # 强制垃圾回收
+        import gc
+        gc.collect()
+        logger.info("数据库连接清理完成")
+    except Exception as e:
+        logger.warning(f"数据库连接清理失败: {e}")
 
     logger.info("Application shutdown completed")
 

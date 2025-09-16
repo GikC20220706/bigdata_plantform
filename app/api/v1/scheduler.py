@@ -36,12 +36,12 @@ async def create_dag(request: CreateDAGRequest):
     try:
         logger.info(f"创建DAG请求: {request.dag_id}")
 
-        # 验证DAG ID是否已存在
-        existing_dag = await airflow_client.get_dag(request.dag_id)
-        if existing_dag:
+        # 本地文件检查：检查是否已经生成过同名的DAG文件
+        dag_file_path = dag_generator_service.dag_folder / f"{request.dag_id}.py"
+        if dag_file_path.exists():
             raise HTTPException(
                 status_code=400,
-                detail=f"DAG ID '{request.dag_id}' 已存在"
+                detail=f"DAG文件 '{request.dag_id}.py' 已存在，请使用不同的 DAG ID 或删除现有文件"
             )
 
         # 准备任务配置
@@ -72,8 +72,24 @@ async def create_dag(request: CreateDAGRequest):
         result = await dag_generator_service.generate_dag(task_config, schedule_config)
 
         if result["success"]:
+            logger.info(f"DAG '{request.dag_id}' 创建成功")
+
             return create_response(
-                data=result,
+                data={
+                    **result,
+                    "instructions": {
+                        "next_steps": [
+                            "DAG文件已生成到 Airflow DAG 目录",
+                            "Airflow Scheduler 将在1-2分钟内自动扫描到新DAG",
+                            "如需立即查看，可重启 Airflow Scheduler 或在WebUI中刷新",
+                            f"DAG将出现在 Airflow WebUI: http://localhost:8080"
+                        ],
+                        "troubleshooting": {
+                            "if_dag_not_visible": "docker-compose restart airflow-scheduler",
+                            "manual_check": f"docker exec airflow-webserver airflow dags list | grep {request.dag_id}"
+                        }
+                    }
+                },
                 message=f"DAG '{request.dag_id}' 创建成功"
             )
         else:
@@ -684,6 +700,10 @@ async def get_recent_task_instances(
         dags_result = await airflow_client.get_dags(limit=1000)
         all_task_instances = []
 
+        formatted_date = None
+        if date:
+            formatted_date = f"{date}T00:00:00Z"
+
         # 遍历每个DAG获取最近的运行实例
         for dag in dags_result.get("dags", []):
             dag_id = dag["dag_id"]
@@ -697,7 +717,7 @@ async def get_recent_task_instances(
                 dag_runs_result = await airflow_client.get_dag_runs(
                     dag_id=dag_id,
                     limit=5,
-                    execution_date_gte=date if date else None
+                    execution_date_gte=formatted_date if date else None
                 )
 
                 # 遍历每个DAG运行获取任务实例
@@ -769,6 +789,8 @@ async def get_daily_task_statistics(date: str) -> Dict[str, Any]:
         success_tasks = 0
         failed_tasks = 0
         running_tasks = 0
+        date_start = f"{date}T00:00:00Z"
+        date_end = f"{date}T23:59:59Z"
 
         for dag in dags_result.get("dags", []):
             dag_id = dag["dag_id"]
@@ -777,8 +799,8 @@ async def get_daily_task_statistics(date: str) -> Dict[str, Any]:
                 dag_runs_result = await airflow_client.get_dag_runs(
                     dag_id=dag_id,
                     limit=10,
-                    execution_date_gte=date,
-                    execution_date_lte=date
+                    execution_date_gte=date_start,
+                    execution_date_lte=date_end
                 )
 
                 for dag_run in dag_runs_result.get("dag_runs", []):
@@ -839,6 +861,9 @@ async def get_hourly_task_statistics(date: str) -> Dict[str, Any]:
         # 获取所有DAG的任务数据并按小时统计
         dags_result = await airflow_client.get_dags(limit=1000)
 
+        date_start = f"{date}T00:00:00Z"
+        date_end = f"{date}T23:59:59Z"
+
         for dag in dags_result.get("dags", []):
             dag_id = dag["dag_id"]
 
@@ -846,8 +871,8 @@ async def get_hourly_task_statistics(date: str) -> Dict[str, Any]:
                 dag_runs_result = await airflow_client.get_dag_runs(
                     dag_id=dag_id,
                     limit=10,
-                    execution_date_gte=date,
-                    execution_date_lte=date
+                    execution_date_gte=date_start,
+                    execution_date_lte=date_end
                 )
 
                 for dag_run in dag_runs_result.get("dag_runs", []):

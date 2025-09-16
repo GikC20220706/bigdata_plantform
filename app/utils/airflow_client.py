@@ -298,8 +298,8 @@ async def get_dag_status_summary(dag_id: str, days: int = 7) -> Dict[str, Any]:
 
         runs = await airflow_client.get_dag_runs(
             dag_id=dag_id,
-            execution_date_gte=start_date.isoformat(),
-            execution_date_lte=end_date.isoformat(),
+            execution_date_gte=start_date.strftime("%Y-%m-%dT%H:%M:%S.%fZ"),
+            execution_date_lte=end_date.strftime("%Y-%m-%dT%H:%M:%S.%fZ"),
             limit=100
         )
 

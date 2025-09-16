@@ -492,7 +492,7 @@ class DataXIntegrationService:
 
             elif file_type == 'orc':
                 writer_params["compress"] = target.get('compression', 'snappy')
-
+                writer_params["fieldDelimiter"] = target.get('field_delimiter', '\t')
             return {
                 "name": "hdfswriter",
                 "parameter": writer_params

@@ -376,32 +376,43 @@ class SQLExecutor(BaseExecutor):
     ) -> Dict[str, Any]:
         """
         执行查询类SQL
-
-        Args:
-            client: 数据库客户端
-            sql: SQL语句
-            task_config: 任务配置
-
-        Returns:
-            Dict[str, Any]: 查询结果
         """
         # 获取配置参数
         limit = task_config.get("limit", self.max_rows_limit)
         fetch_data = task_config.get("fetch_data", True)
 
-        # 执行查询
+        # 修改：检查client是否支持limit参数
         if fetch_data:
-            rows = await client.execute_query(sql, limit=limit)
-            return {
-                "row_count": len(rows) if rows else 0,
-                "data": rows[:100] if rows else [],  # 只返回前100行数据
-                "total_rows": len(rows) if rows else 0,
-                "limited": len(rows) >= limit if rows else False
-            }
+            try:
+                # 先尝试不带limit参数执行
+                rows = await client.execute_query(sql)
+
+                # 如果获取到数据且设置了limit，手动截取
+                if rows and limit:
+                    rows = rows[:limit]
+
+                return {
+                    "row_count": len(rows) if rows else 0,
+                    "data": rows[:100] if rows else [],  # 只返回前100行数据
+                    "total_rows": len(rows) if rows else 0,
+                    "limited": len(rows) >= limit if rows and limit else False
+                }
+            except TypeError as e:
+                # 如果报类型错误，说明可能是limit参数问题，尝试其他方式
+                logger.warning(f"execute_query不支持limit参数: {e}")
+                rows = await client.execute_query(sql)
+                if rows and limit:
+                    rows = rows[:limit]
+                return {
+                    "row_count": len(rows) if rows else 0,
+                    "data": rows[:100] if rows else [],
+                    "total_rows": len(rows) if rows else 0,
+                    "limited": len(rows) >= limit if rows and limit else False
+                }
         else:
             # 只获取行数，不返回数据
             count_sql = f"SELECT COUNT(*) as count FROM ({sql}) as count_query"
-            count_result = await client.execute_query(count_sql, limit=1)
+            count_result = await client.execute_query(count_sql)
 
             return {
                 "row_count": count_result[0]["count"] if count_result else 0,
