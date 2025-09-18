@@ -50,8 +50,8 @@ async def create_custom_api(
             "api_id": api.id,
             "api_name": api.api_name,
             "api_path": api.api_path,
-            "created_at": api.created_at,
-            "parameter_count": len(api.parameters)
+            "created_at": datetime.now(),
+            "parameter_count": len(api_request.parameters)
         }
 
         return create_response(
@@ -149,7 +149,7 @@ async def get_custom_api(
                 "id": api.data_source.id,
                 "name": api.data_source.name,
                 "type": api.data_source.source_type,
-                "host": json.loads(api.data_source.connection_config).get("host", "")
+                "host": _safe_get_host(api.data_source.connection_config)
             } if api.data_source else None,
             "sql_template": api.sql_template,
             "http_method": api.http_method,
@@ -690,3 +690,15 @@ async def get_api_full_docs(
     except Exception as e:
         logger.error(f"获取完整文档失败: {e}")
         raise HTTPException(status_code=500, detail="获取文档失败")
+
+def _safe_get_host(connection_config):
+    """安全获取主机地址"""
+    try:
+        if isinstance(connection_config, dict):
+            return connection_config.get("host", "")
+        elif isinstance(connection_config, str):
+            return json.loads(connection_config).get("host", "")
+        else:
+            return ""
+    except Exception:
+        return ""

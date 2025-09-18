@@ -600,20 +600,22 @@ class DataXIntegrationService:
 
             logger.info(f"执行DataX命令: {' '.join(cmd)}")
             logger.info(f"JVM参数: {env.get('DATAX_JVM_OPTS', 'None')}")
-
+            env = os.environ.copy()
+            env['PYTHONIOENCODING'] = 'utf-8'  # 确保Python输出使用UTF-8
+            env['LANG'] = 'en_US.UTF-8'  # 设置系统locale
             # 异步执行命令
             process = await asyncio.create_subprocess_exec(
                 *cmd,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
-                env=env
+                env=env  # 添加这行
             )
 
             stdout, stderr = await process.communicate()
 
             # 解码输出
-            stdout_text = stdout.decode('utf-8', errors='replace')
-            stderr_text = stderr.decode('utf-8', errors='replace')
+            stdout_text = self._safe_decode(stdout)
+            stderr_text = self._safe_decode(stderr)
 
             logger.info(f"DataX stdout: {stdout_text}")
             if stderr_text:
@@ -665,6 +667,23 @@ class DataXIntegrationService:
                 "error": f"执行异常: {str(e)}",
                 "exit_code": -1
             }
+
+    def _safe_decode(self, data: bytes) -> str:
+        """安全解码字节数据为字符串"""
+        if not data:
+            return ""
+
+        # 尝试多种编码方式
+        encodings = ['utf-8', 'gbk', 'gb2312', 'latin-1']
+
+        for encoding in encodings:
+            try:
+                return data.decode(encoding)
+            except UnicodeDecodeError:
+                continue
+
+        # 如果所有编码都失败，使用替换策略
+        return data.decode('utf-8', errors='replace')
 
     def _generate_orc_schema(self, columns: List[str]) -> str:
         """生成ORC Schema"""

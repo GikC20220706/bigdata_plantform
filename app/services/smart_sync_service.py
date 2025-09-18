@@ -28,15 +28,6 @@ class SmartSyncService:
         # 🔧 修改：使用延迟初始化
         self._datax_service = None
         self.integration_service = get_optimized_data_integration_service()
-
-    @property
-    def datax_service(self):
-        """延迟加载 datax_service，避免循环导入"""
-        if self._datax_service is None:
-            # 在需要时才导入
-            from app.services.datax_service import EnhancedSyncService
-            self._datax_service = EnhancedSyncService()
-        return self._datax_service
     async def get_sync_history(
             self,
             page: int = 1,
@@ -369,7 +360,16 @@ class SmartSyncService:
 
                     # 执行同步
                     logger.info(f"⚡ 开始执行DataX同步任务...")
-                    sync_result = await self.datax_service.execute_sync_task(datax_config)
+                    try:
+                        from app.services.datax_service import DataXIntegrationService
+                        datax_service = DataXIntegrationService()
+                        sync_result = await datax_service.create_sync_task(datax_config)
+                    except Exception as sync_error:
+                        logger.error(f"DataX同步执行失败: {sync_error}")
+                        sync_result = {
+                            "success": False,
+                            "error": str(sync_error)
+                        }
                     logger.info(f"DataX执行结果: success={sync_result.get('success')}")
 
                     if sync_result.get('success'):

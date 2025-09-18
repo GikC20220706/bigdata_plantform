@@ -365,6 +365,12 @@ def setup_routers(app: FastAPI) -> None:
 
     # Include main API router
     app.include_router(api_router)
+    from app.utils.dynamic_api_router import dynamic_api_router
+    app.include_router(dynamic_api_router.router)
+
+    @app.get("/api/custom/manual-test")
+    async def manual_test():
+        return {"message": "Manual route works!"}
 
 
     @app.get("/docs", include_in_schema=False)
