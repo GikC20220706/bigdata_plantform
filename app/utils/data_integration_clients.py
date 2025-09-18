@@ -235,6 +235,7 @@ class MySQLClient(DatabaseClient):
             async with pool.acquire() as conn:
                 async with conn.cursor() as cursor:
                     db_name = database or self.config.get('database')
+                    await cursor.execute("SET NAMES utf8mb4 COLLATE utf8mb4_unicode_ci")
 
                     # 获取列信息
                     await cursor.execute("""

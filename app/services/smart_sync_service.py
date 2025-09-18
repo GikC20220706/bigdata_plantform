@@ -13,7 +13,6 @@ from typing import Dict, List, Any, Optional
 from pathlib import Path
 from loguru import logger
 
-from app.services.datax_service import EnhancedSyncService
 from app.services.optimized_data_integration_service import get_optimized_data_integration_service
 from app.utils.response import create_response
 from app.models.sync_history import SyncHistory, SyncTableHistory
@@ -26,9 +25,18 @@ class SmartSyncService:
     """智能数据同步服务"""
 
     def __init__(self):
-        self.datax_service = EnhancedSyncService()
+        # 🔧 修改：使用延迟初始化
+        self._datax_service = None
         self.integration_service = get_optimized_data_integration_service()
 
+    @property
+    def datax_service(self):
+        """延迟加载 datax_service，避免循环导入"""
+        if self._datax_service is None:
+            # 在需要时才导入
+            from app.services.datax_service import EnhancedSyncService
+            self._datax_service = EnhancedSyncService()
+        return self._datax_service
     async def get_sync_history(
             self,
             page: int = 1,
@@ -450,9 +458,15 @@ class SmartSyncService:
 
         for plan in sync_plan['sync_plans']:
             try:
+                schema_mapping = plan['schema_mapping']
+                # 过滤掉分区字段
+                filtered_schema = {
+                    "columns": [col for col in schema_mapping.get('columns', [])
+                                if col.get('name', '').lower() not in ['dt', 'partition_date']]
+                }
                 # 生成Hive外部表SQL
                 create_sql = await self._generate_hive_external_table_sql(
-                    plan['schema_mapping'],
+                    filtered_schema,
                     plan['target_table'],
                     sync_plan['target_name']
                 )
@@ -479,10 +493,11 @@ class SmartSyncService:
 
     async def _generate_hive_external_table_sql(self, schema_mapping: Dict[str, Any],
                                                 table_name: str, target_source: str) -> str:
+
         """生成Hive外部表SQL - 修复版本"""
         target_config = await self._get_data_source_config(target_source)
         columns = schema_mapping.get('columns', [])
-
+        logger.info(f"建表字段列表: {[col.get('name') for col in columns]}")
         if not columns:
             raise ValueError("缺少字段映射信息")
 
@@ -1147,28 +1162,79 @@ class SmartSyncService:
                 final_source_config['file_type'] = source_config.get('file_type', 'orc')
                 final_source_config['field_delimiter'] = source_config.get('field_delimiter', '\t')
 
-            # 🔧 简化字段处理：直接从table_plan获取，不使用schema_mapping
+            # 🔧 强化字段处理逻辑
             schema_mapping = table_plan.get('schema_mapping', {})
             columns_mapping = schema_mapping.get('columns', [])
 
             if not columns_mapping:
-                # 🔧 如果没有schema_mapping，使用简单的字段列表
-                logger.warning(f"表 {table_plan['source_table']} 没有schema_mapping，使用简化字段配置")
-                # 生成简单的字段配置
-                simple_columns = [f"col_{i}" for i in range(10)]  # 假设10个字段
-                source_columns = simple_columns
-                target_columns = simple_columns
-            else:
-                # 过滤掉分区字段，只保留字段名
-                data_columns = [col for col in columns_mapping if col['name'].lower() != 'dt']
-                source_columns = [col['name'] for col in data_columns]
-                target_columns = [col['name'] for col in data_columns]
+                logger.warning(f"表 {table_plan['source_table']} 没有schema_mapping，尝试直接获取表结构...")
 
-            logger.info(f"字段配置: 源字段({len(source_columns)})={source_columns[:5]}...")
-            logger.info(f"字段配置: 目标字段({len(target_columns)})={target_columns[:5]}...")
+                # 直接通过数据库客户端获取表结构
+                source_name = sync_plan['source_name']
+                table_name = table_plan['source_table']
 
+                client = self.integration_service.connection_manager.get_client(source_name)
+                if not client:
+                    raise ValueError(f"无法获取数据源 {source_name} 的客户端连接")
+
+                # 获取表结构
+                schema_result = await client.get_table_schema(table_name)
+
+                if not schema_result or 'columns' not in schema_result or not schema_result['columns']:
+                    raise ValueError(f"无法获取表 {table_name} 的结构信息，schema_result: {schema_result}")
+
+                # 转换为标准的映射格式
+                columns_mapping = []
+                for idx, col in enumerate(schema_result['columns']):
+                    col_name = col.get('name', '').strip()
+                    if not col_name:
+                        logger.warning(f"发现空字段名，跳过索引 {idx}")
+                        continue
+
+                    col_type = col.get('type', 'VARCHAR').strip()
+                    if not col_type:
+                        col_type = 'VARCHAR'
+
+                    target_type_mapped = self._map_data_type(col_type, target_config['type'])
+
+                    columns_mapping.append({
+                        'name': col_name,
+                        'source_type': col_type,
+                        'target_type': target_type_mapped,
+                        'nullable': col.get('nullable', True)
+                    })
+
+                if not columns_mapping:
+                    raise ValueError(f"表 {table_name} 转换后没有有效的字段信息")
+
+                logger.info(f"成功直接获取并转换了 {len(columns_mapping)} 个字段")
+
+            # 过滤掉分区字段，只保留数据字段
+            data_columns = []
+            for col in columns_mapping:
+                col_name = col.get('name', '').lower().strip()
+                if col_name and col_name not in ['dt', 'partition_date']:
+                    data_columns.append(col)
+
+            # 提取字段名，确保非空
+            source_columns = []
+            target_columns = []
+
+            for col in data_columns:
+                col_name = str(col.get('name', '')).strip()
+                if col_name:
+                    source_columns.append(col_name)
+                    target_columns.append(col_name)
+
+            logger.info(
+                f"字段配置: 源字段({len(source_columns)})={source_columns[:5] if len(source_columns) > 5 else source_columns}...")
+            logger.info(
+                f"字段配置: 目标字段({len(target_columns)})={target_columns[:5] if len(target_columns) > 5 else target_columns}...")
+
+            # 严格检查字段列表
             if not source_columns or not target_columns:
-                raise ValueError("字段列表为空")
+                raise ValueError(
+                    f"表 {table_plan['source_table']} 处理后字段列表为空，原始字段数: {len(columns_mapping)}, 数据字段数: {len(data_columns)}")
 
             # 确定写入模式
             write_mode = self._determine_write_mode(table_plan, sync_plan.get('sync_mode', 'full'))
@@ -1178,7 +1244,7 @@ class SmartSyncService:
             final_target_config['columns'] = target_columns
             final_target_config['write_mode'] = write_mode
 
-            # 🔧 构建最终的DataX配置，完全去掉schema_mapping引用
+            # 🔧 构建最终的DataX配置
             datax_config = {
                 "id": f"sync_{sync_plan['source_name']}_{table_plan['source_table']}",
                 "name": f"{table_plan['source_table']} -> {target_table_name}",
@@ -1186,22 +1252,106 @@ class SmartSyncService:
                 "target": final_target_config,
                 "sync_type": "full",
                 "parallel_jobs": sync_plan.get('recommended_parallel_jobs', 4)
-                # 🔧 完全删除 schema_mapping 引用
             }
 
             logger.info(f"DataX配置生成完成，源字段数: {len(source_columns)}, 目标字段数: {len(target_columns)}")
+
+            # JSON序列化测试
             try:
                 import json
-                test_json = json.dumps(datax_config, ensure_ascii=False)
-                logger.info("JSON序列化测试通过")
-            except Exception as e:
-                logger.error(f"JSON序列化失败: {e}")
-                raise
+                test_json = json.dumps(datax_config, ensure_ascii=False, default=str)
+                logger.info("DataX配置JSON序列化测试通过")
+            except Exception as json_error:
+                logger.error(f"DataX配置JSON序列化失败: {json_error}")
+                raise ValueError(f"DataX配置序列化失败: {json_error}")
+
             return datax_config
 
         except Exception as e:
             logger.error(f"DataX配置生成失败: {str(e)}")
-            raise e
+            logger.error(f"错误详情: 源表={table_plan.get('source_table')}, 目标表={table_plan.get('target_table')}")
+            raise
+
+    # def _map_data_type_safe(self, source_type: str, target_type: str) -> str:
+    #     """安全的数据类型映射，处理各种边界情况"""
+    #     try:
+    #         if not source_type or not target_type:
+    #             return 'VARCHAR(255)'
+    #
+    #         source_type_clean = str(source_type).upper().strip()
+    #         target_type_clean = str(target_type).lower().strip()
+    #
+    #         # 提取基础类型（去掉括号内容和修饰符）
+    #         base_source_type = source_type_clean.split('(')[0].split()[0]
+    #
+    #         # 详细的类型映射表
+    #         type_mappings = {
+    #             'hive': {
+    #                 'INT': 'INT', 'INTEGER': 'INT', 'BIGINT': 'BIGINT',
+    #                 'VARCHAR': 'STRING', 'TEXT': 'STRING', 'CHAR': 'STRING',
+    #                 'STRING': 'STRING', 'LONGTEXT': 'STRING', 'MEDIUMTEXT': 'STRING',
+    #                 'DATETIME': 'TIMESTAMP', 'TIMESTAMP': 'TIMESTAMP', 'DATE': 'DATE',
+    #                 'DECIMAL': 'DECIMAL(10,2)', 'FLOAT': 'FLOAT', 'DOUBLE': 'DOUBLE',
+    #                 'BOOLEAN': 'BOOLEAN', 'TINYINT': 'TINYINT', 'SMALLINT': 'SMALLINT',
+    #                 'BINARY': 'BINARY', 'VARBINARY': 'BINARY', 'BLOB': 'BINARY'
+    #             },
+    #             'mysql': {
+    #                 'INT': 'INT', 'INTEGER': 'INT', 'BIGINT': 'BIGINT',
+    #                 'VARCHAR': 'VARCHAR(255)', 'TEXT': 'TEXT', 'STRING': 'TEXT',
+    #                 'CHAR': 'CHAR(50)', 'LONGTEXT': 'LONGTEXT', 'MEDIUMTEXT': 'MEDIUMTEXT',
+    #                 'DATETIME': 'DATETIME', 'TIMESTAMP': 'TIMESTAMP', 'DATE': 'DATE',
+    #                 'DECIMAL': 'DECIMAL(10,2)', 'FLOAT': 'FLOAT', 'DOUBLE': 'DOUBLE',
+    #                 'BOOLEAN': 'TINYINT(1)', 'TINYINT': 'TINYINT', 'SMALLINT': 'SMALLINT',
+    #                 'BINARY': 'BINARY(255)', 'VARBINARY': 'VARBINARY(255)', 'BLOB': 'BLOB'
+    #             },
+    #             'postgresql': {
+    #                 'INT': 'INTEGER', 'INTEGER': 'INTEGER', 'BIGINT': 'BIGINT',
+    #                 'VARCHAR': 'VARCHAR(255)', 'TEXT': 'TEXT', 'STRING': 'TEXT',
+    #                 'CHAR': 'CHAR(50)', 'LONGTEXT': 'TEXT', 'MEDIUMTEXT': 'TEXT',
+    #                 'DATETIME': 'TIMESTAMP', 'TIMESTAMP': 'TIMESTAMP', 'DATE': 'DATE',
+    #                 'DECIMAL': 'NUMERIC(10,2)', 'FLOAT': 'REAL', 'DOUBLE': 'DOUBLE PRECISION',
+    #                 'BOOLEAN': 'BOOLEAN', 'TINYINT': 'SMALLINT', 'SMALLINT': 'SMALLINT',
+    #                 'BINARY': 'BYTEA', 'VARBINARY': 'BYTEA', 'BLOB': 'BYTEA'
+    #             },
+    #             'kingbase': {
+    #                 'INT': 'INTEGER', 'INTEGER': 'INTEGER', 'BIGINT': 'BIGINT',
+    #                 'VARCHAR': 'VARCHAR(255)', 'TEXT': 'TEXT', 'STRING': 'TEXT',
+    #                 'CHAR': 'CHAR(50)', 'LONGTEXT': 'TEXT', 'MEDIUMTEXT': 'TEXT',
+    #                 'DATETIME': 'TIMESTAMP', 'TIMESTAMP': 'TIMESTAMP', 'DATE': 'DATE',
+    #                 'DECIMAL': 'NUMERIC(10,2)', 'FLOAT': 'REAL', 'DOUBLE': 'DOUBLE PRECISION',
+    #                 'BOOLEAN': 'BOOLEAN', 'TINYINT': 'SMALLINT', 'SMALLINT': 'SMALLINT',
+    #                 'BINARY': 'BYTEA', 'VARBINARY': 'BYTEA', 'BLOB': 'BYTEA'
+    #             },
+    #             'doris': {
+    #                 'INT': 'INT', 'INTEGER': 'INT', 'BIGINT': 'BIGINT',
+    #                 'VARCHAR': 'VARCHAR(255)', 'TEXT': 'STRING', 'STRING': 'STRING',
+    #                 'CHAR': 'CHAR(50)', 'LONGTEXT': 'STRING', 'MEDIUMTEXT': 'STRING',
+    #                 'DATETIME': 'DATETIME', 'TIMESTAMP': 'DATETIME', 'DATE': 'DATE',
+    #                 'DECIMAL': 'DECIMAL(10,2)', 'FLOAT': 'FLOAT', 'DOUBLE': 'DOUBLE',
+    #                 'BOOLEAN': 'BOOLEAN', 'TINYINT': 'TINYINT', 'SMALLINT': 'SMALLINT',
+    #                 'BINARY': 'STRING', 'VARBINARY': 'STRING', 'BLOB': 'STRING'
+    #             }
+    #         }
+    #
+    #         # 获取目标数据库的映射表
+    #         target_mapping = type_mappings.get(target_type_clean, type_mappings['mysql'])
+    #
+    #         # 查找映射
+    #         mapped_type = target_mapping.get(base_source_type)
+    #
+    #         if mapped_type:
+    #             logger.debug(f"类型映射成功: {source_type} -> {mapped_type} (目标: {target_type_clean})")
+    #             return mapped_type
+    #         else:
+    #             # 使用默认类型
+    #             default_type = 'STRING' if target_type_clean == 'hive' else 'VARCHAR(255)'
+    #             logger.debug(f"类型映射使用默认: {source_type} -> {default_type} (未找到映射)")
+    #             return default_type
+    #
+    #     except Exception as e:
+    #         logger.warning(f"类型映射异常 {source_type} -> {target_type}: {e}")
+    #         # 异常时返回安全的默认类型
+    #         return 'STRING' if str(target_type).lower() == 'hive' else 'VARCHAR(255)'
 
     async def _analyze_field_lengths(self, source_name: str, table_name: str, columns: List[Dict]) -> Dict[str, int]:
         """分析字段实际使用的最大长度"""
