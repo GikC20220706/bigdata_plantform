@@ -117,6 +117,25 @@ async def lifespan(app: FastAPI):
 
     except Exception as e:
         logger.warning(f"Data integration service initialization failed: {e}")
+    try:
+        from app.utils.dynamic_api_router import dynamic_api_router
+        from app.utils.database import async_session_maker
+
+        logger.info("正在刷新动态API路由...")
+
+        # 使用现有的异步会话创建器
+        async with async_session_maker() as db:
+            refresh_result = await dynamic_api_router.refresh_all_apis(db)
+
+        logger.info(f"动态API路由刷新完成: "
+                    f"总计 {refresh_result['statistics']['total_apis']} 个API, "
+                    f"注册 {refresh_result['statistics']['registered']} 个, "
+                    f"更新 {refresh_result['statistics']['updated']} 个, "
+                    f"移除 {refresh_result['statistics']['removed']} 个, "
+                    f"失败 {refresh_result['statistics']['failed']} 个")
+
+    except Exception as e:
+        logger.error(f"动态API路由刷新失败: {e}")
 
     # Initialize metrics collector
     try:
@@ -362,11 +381,68 @@ def setup_middleware(app: FastAPI) -> None:
 
 def setup_routers(app: FastAPI) -> None:
     """Setup API routers."""
-
-    # Include main API router
+    # 后挂载API路由器
     app.include_router(api_router)
-    from app.utils.dynamic_api_router import dynamic_api_router
-    app.include_router(dynamic_api_router.router)
+
+    @app.api_route("/api/custom/{full_path:path}", methods=["GET", "POST"])
+    async def universal_dynamic_handler(full_path: str, request: Request):
+        from app.utils.database import async_session_maker
+        from app.services.custom_api_service import custom_api_service
+        from loguru import logger
+
+        api_path = f"/api/custom/{full_path}"
+        method = request.method
+
+        logger.info(f"收到动态API请求: {method} {api_path}")
+
+        try:
+            async with async_session_maker() as db:
+                # 查找匹配的API
+                apis, _ = await custom_api_service.get_apis_list(db=db, is_active=True, limit=1000)
+
+                matching_api = None
+                for api in apis:
+                    if api.api_path == api_path and api.http_method.value == method:
+                        matching_api = api
+                        break
+
+                if not matching_api:
+                    logger.warning(f"未找到匹配的API: {method} {api_path}")
+                    return {"detail": "Not Found"}
+
+                # 获取请求参数
+                request_params = {}
+                if method == "GET":
+                    request_params = dict(request.query_params)
+                elif method == "POST":
+                    try:
+                        request_params = await request.json()
+                    except:
+                        request_params = {}
+
+                # 执行API
+                result = await custom_api_service.execute_api_query(
+                    db=db,
+                    api_id=matching_api.id,
+                    request_params=request_params,
+                    client_ip=request.client.host if request.client else "unknown",
+                    user_agent=request.headers.get("user-agent", "unknown")
+                )
+
+                if result.success:
+                    return {
+                        "code": 200,
+                        "message": "查询成功",
+                        "data": result.data,
+                        "total": result.total_count,
+                        "response_time_ms": result.response_time_ms
+                    }
+                else:
+                    return {"detail": "Internal Server Error", "error": result.error_message}
+
+        except Exception as e:
+            logger.error(f"动态API处理失败: {e}")
+            return {"detail": "Internal Server Error", "error": str(e)}
 
     @app.get("/api/custom/manual-test")
     async def manual_test():

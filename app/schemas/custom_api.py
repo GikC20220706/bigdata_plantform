@@ -38,12 +38,15 @@ class APIParameterCreate(BaseModel):
     validation_rule: Optional[Dict[str, Any]] = Field(None, description="参数验证规则")
 
     @field_validator('default_value')
-    def validate_default_value(cls, v, values):
+    @classmethod
+    def validate_default_value(cls, v, info):
         """验证默认值与参数类型匹配"""
         if v is None:
             return v
 
-        param_type = values.get('param_type')
+        # 从 info.data 获取其他字段值
+        param_type = info.data.get('param_type') if info.data else None
+
         if param_type == ParameterType.INTEGER:
             try:
                 int(v)

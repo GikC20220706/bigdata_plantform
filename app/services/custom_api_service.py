@@ -317,34 +317,63 @@ class CustomAPIService:
             template = Template(api.sql_template)
             executed_sql = template.render(**processed_params)
 
-            # 4. 执行查询
-            data_source_config = json.loads(api.data_source.connection_config)
+            # 4. 执行查询 - 修复连接配置处理
+            connection_config = api.data_source.connection_config
+            if isinstance(connection_config, str):
+                data_source_config = json.loads(connection_config)
+            else:
+                data_source_config = connection_config
+
             client = DatabaseClientFactory.create_client(
                 api.data_source.source_type,
                 data_source_config
             )
 
+            # 5. 执行查询并处理不同的返回格式
             query_result = await client.execute_query(executed_sql)
 
-            if not query_result.get('success', False):
-                raise Exception(query_result.get('error', '查询执行失败'))
+            # 处理不同的返回格式
+            result_data = []
+            success = False
 
-            result_data = query_result.get('data', [])
+            if isinstance(query_result, list):
+                # 直接返回列表的情况（如HiveClient）
+                result_data = query_result
+                success = True
+            elif isinstance(query_result, dict):
+                # 返回字典的情况
+                if query_result.get('success', False):
+                    result_data = query_result.get('data', [])
+                    success = True
+                else:
+                    error_message = query_result.get('error', '查询执行失败')
+                    success = False
+            else:
+                # 其他情况，尝试转换为列表
+                try:
+                    result_data = list(query_result) if query_result else []
+                    success = True
+                except Exception as e:
+                    error_message = f"无法处理查询结果格式: {str(e)}"
+                    success = False
+
+            if not success:
+                raise Exception(error_message or '查询执行失败')
+
             response_time_ms = int((time.time() - start_time) * 1000)
 
-            # 5. 更新API统计
+            # 6. 更新API统计
             await self._update_api_statistics(db, api_id, success=True)
 
-            # 6. 记录访问日志
+            # 7. 记录访问日志
             await self._log_api_access(
                 db=db,
                 api_id=api_id,
                 client_ip=client_ip,
                 user_agent=user_agent,
                 request_params=request_params,
-                status_code=status_code,
                 response_time_ms=response_time_ms,
-                executed_sql=executed_sql,
+                status_code=200,
                 result_count=len(result_data),
                 error_message=None
             )
@@ -358,9 +387,11 @@ class CustomAPIService:
             )
 
         except Exception as e:
+            response_time_ms = int((time.time() - start_time) * 1000)
             error_message = str(e)
             status_code = 500
-            response_time_ms = int((time.time() - start_time) * 1000)
+
+            logger.error(f"API查询执行失败 {api_id}: {error_message}")
 
             # 更新失败统计
             await self._update_api_statistics(db, api_id, success=False)
@@ -372,17 +403,16 @@ class CustomAPIService:
                 client_ip=client_ip,
                 user_agent=user_agent,
                 request_params=request_params,
-                status_code=status_code,
                 response_time_ms=response_time_ms,
-                executed_sql=executed_sql,
+                status_code=status_code,
                 result_count=0,
                 error_message=error_message
             )
 
-            logger.error(f"API执行失败 (ID: {api_id}): {error_message}")
-
             return APIExecutionResult(
                 success=False,
+                data=[],
+                total_count=0,
                 response_time_ms=response_time_ms,
                 executed_sql=executed_sql,
                 error_message=error_message
@@ -544,6 +574,18 @@ class CustomAPIService:
             await db.commit()
         except Exception as e:
             logger.error(f"记录API访问日志失败: {e}")
+
+    def _get_connection_config(self, connection_config) -> Dict[str, Any]:
+        """安全地获取连接配置"""
+        if connection_config is None:
+            raise ValueError("数据源连接配置为空")
+
+        if isinstance(connection_config, dict):
+            return connection_config
+        elif isinstance(connection_config, str):
+            return json.loads(connection_config)
+        else:
+            raise ValueError(f"不支持的连接配置类型: {type(connection_config)}")
 
 
 # 创建服务实例
