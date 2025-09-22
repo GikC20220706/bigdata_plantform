@@ -13,10 +13,14 @@ from loguru import logger
 
 from app.models.user_cluster import UserCluster, ClusterType, ClusterStatus
 from app.utils.response import create_response
+from app.services.cluster_node_discovery import WebApiClusterDiscovery
 
 
 class UserClusterService:
     """用户计算集群管理服务"""
+
+    def __init__(self):
+        self.node_discovery = WebApiClusterDiscovery()
 
     async def get_clusters_list(
             self,
@@ -76,41 +80,106 @@ class UserClusterService:
             name: str,
             cluster_type: str,
             remark: str = "",
-            config: Dict = None
+            web_api_config: Dict = None,
+            auto_discovery: bool = True
     ) -> Dict:
-        """添加新集群"""
+        """添加新集群（包含自动节点发现）"""
         try:
-            # 检查名称是否重复
+            # 1. 检查名称是否重复
             existing = await db.execute(
                 select(UserCluster).where(UserCluster.name == name)
             )
             if existing.scalar_one_or_none():
                 raise ValueError(f"集群名称 '{name}' 已存在")
 
-            # 验证集群类型
+            # 2. 验证集群类型
+            logger.info(f"开始验证集群类型: '{cluster_type}'")
+            logger.info(f"ClusterType 枚举定义: {ClusterType}")
+            logger.info(f"ClusterType 所有值: {[e.name + '=' + e.value for e in ClusterType]}")
+
             try:
                 cluster_type_enum = ClusterType(cluster_type)
-            except ValueError:
+                logger.info(f"成功转换: {cluster_type_enum}")
+            except ValueError as ve:
+                logger.error(f"转换失败: {ve}")
+                # 逐个检查
+                for enum_item in ClusterType:
+                    logger.info(f"检查 {enum_item.value} == '{cluster_type}': {enum_item.value == cluster_type}")
                 raise ValueError(f"不支持的集群类型: {cluster_type}")
 
-            # 创建集群记录
+            # 3. 如果启用自动发现，先发现节点
+            discovery_result = {}
+            if auto_discovery and web_api_config:
+                logger.info(f"开始自动发现 {cluster_type} 集群节点...")
+                discovery_result = await self.node_discovery.discover_cluster_nodes(
+                    cluster_type, web_api_config
+                )
+
+                if not discovery_result.get('success'):
+                    logger.warning(f"节点自动发现失败: {discovery_result.get('error')}")
+                else:
+                    logger.info(f"成功发现 {discovery_result.get('total_nodes', 0)} 个节点")
+
+            # 4. 创建集群记录
+            cluster_config = web_api_config or {}
+            if discovery_result.get('success'):
+                cluster_config['discovered_nodes'] = discovery_result['nodes']
+                cluster_config['cluster_info'] = discovery_result['cluster_info']
+                cluster_config['last_discovery'] = discovery_result['discovery_time']
+
+            # 从发现结果中提取详细信息
+            nodes = discovery_result.get('nodes', [])
+            cluster_info = discovery_result.get('cluster_info', {})
+            nodes_by_type = discovery_result.get('nodes_by_type', {})
+
+            # 计算节点统计
+            total_nodes = len(nodes)
+            active_nodes = len([n for n in nodes if n.get('status') == 'active'])
+
+            # 计算存储信息（从cluster_info中获取）
+            total_capacity = cluster_info.get('total_capacity', 0)
+            used_capacity = cluster_info.get('used_capacity', 0)
+
+            storage_info = f"{used_capacity / (1024 ** 3):.1f}GB/{total_capacity / (1024 ** 3):.1f}GB" if total_capacity > 0 else "未知"
+
+            # 构建URL
+            web_ui_url = None
+            master_url = None
+            if cluster_type == 'hadoop' and web_api_config:
+                namenode_host = web_api_config.get('namenode_host')
+                namenode_port = web_api_config.get('namenode_web_port', 9870)
+                web_ui_url = f"http://{namenode_host}:{namenode_port}"
+                master_url = f"hdfs://{namenode_host}:9000"
+
             new_cluster = UserCluster(
                 name=name,
                 cluster_type=cluster_type_enum,
                 remark=remark,
-                config=config or {},
-                status=ClusterStatus.CHECKING
+                config=cluster_config,
+                status=ClusterStatus.ACTIVE if discovery_result.get('success') else ClusterStatus.CHECKING,
+                node_count=f"{active_nodes}/{total_nodes}",
+                storage_info=storage_info,
+                master_url=master_url,
+                web_ui_url=web_ui_url
             )
 
             db.add(new_cluster)
             await db.commit()
             await db.refresh(new_cluster)
 
-            # 异步检测集群状态
-            asyncio.create_task(self._check_cluster_status(new_cluster.id))
+            # 5. 异步更新集群状态（如果发现成功）
+            if discovery_result.get('success'):
+                asyncio.create_task(self._update_cluster_nodes_info(new_cluster.id, discovery_result))
 
             logger.info(f"成功添加集群: {name}")
-            return new_cluster.to_dict()
+
+            # 6. 返回结果包含发现的节点信息
+            result = new_cluster.to_dict()
+            if discovery_result.get('success'):
+                result['discovered_nodes'] = discovery_result['nodes']
+                result['cluster_info'] = discovery_result['cluster_info']
+
+            return result
 
         except Exception as e:
             await db.rollback()
@@ -307,6 +376,167 @@ class UserClusterService:
             logger.info(f"后台检测集群 {cluster_id} 完成")
         except Exception as e:
             logger.error(f"后台检测集群 {cluster_id} 失败: {e}")
+
+    async def rediscover_cluster_nodes(self, db: AsyncSession, cluster_id: int) -> Dict:
+        """重新发现集群节点"""
+        try:
+            # 获取集群信息
+            result = await db.execute(
+                select(UserCluster).where(UserCluster.id == cluster_id)
+            )
+            cluster = result.scalar_one_or_none()
+
+            if not cluster:
+                raise ValueError(f"集群 ID {cluster_id} 不存在")
+
+            # 从配置中获取Web API信息
+            web_api_config = cluster.config.get('web_api_config')
+            if not web_api_config:
+                raise ValueError("集群缺少Web API配置信息")
+
+            # 重新发现节点
+            discovery_result = await self.node_discovery.discover_cluster_nodes(
+                cluster.cluster_type.value, web_api_config
+            )
+
+            if discovery_result.get('success'):
+                # 更新集群配置
+                updated_config = cluster.config.copy()
+                updated_config['discovered_nodes'] = discovery_result['nodes']
+                updated_config['cluster_info'] = discovery_result['cluster_info']
+                updated_config['last_discovery'] = discovery_result['discovery_time']
+
+                cluster.config = updated_config
+                cluster.status = ClusterStatus.ACTIVE
+
+                await db.commit()
+                await db.refresh(cluster)
+
+                logger.info(f"成功重新发现集群 {cluster.name} 的 {len(discovery_result['nodes'])} 个节点")
+
+                return {
+                    'success': True,
+                    'cluster': cluster.to_dict(),
+                    'discovered_nodes': discovery_result['nodes'],
+                    'cluster_info': discovery_result['cluster_info']
+                }
+            else:
+                raise ValueError(f"节点发现失败: {discovery_result.get('error')}")
+
+        except Exception as e:
+            logger.error(f"重新发现集群节点失败: {e}")
+            raise
+
+    async def _update_cluster_nodes_info(self, cluster_id: int, discovery_result: Dict):
+        """后台更新集群节点信息"""
+        try:
+            # 这里可以实现将发现的节点信息存储到数据库
+            # 或执行其他后台任务
+            logger.info(f"后台更新集群 {cluster_id} 节点信息完成")
+        except Exception as e:
+            logger.error(f"后台更新集群节点信息失败: {e}")
+
+    async def get_cluster_nodes_detail(self, db: AsyncSession, cluster_id: int) -> Dict:
+        """获取集群节点详细信息"""
+        try:
+            result = await db.execute(
+                select(UserCluster).where(UserCluster.id == cluster_id)
+            )
+            cluster = result.scalar_one_or_none()
+
+            if not cluster:
+                raise ValueError(f"集群 ID {cluster_id} 不存在")
+
+            nodes = cluster.config.get('discovered_nodes', [])
+            cluster_info = cluster.config.get('cluster_info', {})
+            last_discovery = cluster.config.get('last_discovery')
+
+            # 统计节点信息
+            node_stats = {
+                'total_nodes': len(nodes),
+                'master_nodes': len([n for n in nodes if n.get('node_type') == 'master']),
+                'worker_nodes': len([n for n in nodes if n.get('node_type') == 'worker']),
+                'active_nodes': len([n for n in nodes if n.get('status') == 'active']),
+                'inactive_nodes': len([n for n in nodes if n.get('status') != 'active'])
+            }
+
+            # 按角色分组节点
+            nodes_by_role = {}
+            for node in nodes:
+                role = node.get('role', 'unknown')
+                if role not in nodes_by_role:
+                    nodes_by_role[role] = []
+                nodes_by_role[role].append(node)
+
+            return {
+                'cluster_id': cluster.id,
+                'cluster_name': cluster.name,
+                'cluster_type': cluster.cluster_type.value,
+                'cluster_status': cluster.status.value,
+                'last_discovery': last_discovery,
+                'cluster_info': cluster_info,
+                'node_statistics': node_stats,
+                'nodes_by_role': nodes_by_role,
+                'all_nodes': nodes
+            }
+
+        except Exception as e:
+            logger.error(f"获取集群节点详情失败: {e}")
+            raise
+
+    async def get_supported_cluster_types(self) -> Dict:
+        """获取支持的集群类型和配置模板"""
+        return {
+            'hadoop': {
+                'name': 'Hadoop HDFS',
+                'description': 'Hadoop分布式文件系统',
+                'required_config': {
+                    'namenode_host': '字符串，NameNode主机地址',
+                    'namenode_web_port': '数字，NameNode Web端口，默认9870'
+                },
+                'optional_config': {
+                    'namenode_rpc_port': '数字，NameNode RPC端口，默认9000'
+                },
+                'discovery_method': 'NameNode Web UI API'
+            },
+            'yarn': {
+                'name': 'YARN资源管理',
+                'description': 'Hadoop YARN资源管理器',
+                'required_config': {
+                    'resourcemanager_host': '字符串，ResourceManager主机地址',
+                    'resourcemanager_web_port': '数字，ResourceManager Web端口，默认8088'
+                },
+                'optional_config': {
+                    'resourcemanager_rpc_port': '数字，ResourceManager RPC端口，默认8032'
+                },
+                'discovery_method': 'ResourceManager REST API'
+            },
+            'flink': {
+                'name': 'Apache Flink',
+                'description': 'Flink流处理引擎',
+                'required_config': {
+                    'jobmanager_host': '字符串，JobManager主机地址',
+                    'jobmanager_web_port': '数字，JobManager Web端口，默认8081'
+                },
+                'optional_config': {
+                    'jobmanager_rpc_port': '数字，JobManager RPC端口，默认6123'
+                },
+                'discovery_method': 'JobManager REST API'
+            },
+            'doris': {
+                'name': 'Apache Doris',
+                'description': 'Doris实时数据仓库',
+                'required_config': {
+                    'frontend_host': '字符串，Frontend主机地址',
+                    'frontend_web_port': '数字，Frontend Web端口，默认8060'
+                },
+                'optional_config': {
+                    'username': '字符串，认证用户名，默认root',
+                    'password': '字符串，认证密码'
+                },
+                'discovery_method': 'Frontend HTTP API'
+            }
+        }
 
 
 # 创建全局服务实例
