@@ -10,6 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, update, delete, and_, or_, func
 from sqlalchemy.orm import selectinload
 from loguru import logger
+from sqlalchemy.testing import db
 
 from app.models.user_cluster import UserCluster, ClusterType, ClusterStatus
 from app.utils.response import create_response
@@ -267,7 +268,7 @@ class UserClusterService:
             raise
 
     async def check_cluster(self, db: AsyncSession, cluster_id: int) -> Dict:
-        """检测集群状态"""
+        """检测计算集群状态 - 使用真实检测逻辑"""
         try:
             result = await db.execute(
                 select(UserCluster).where(UserCluster.id == cluster_id)
@@ -277,19 +278,67 @@ class UserClusterService:
             if not cluster:
                 raise ValueError(f"集群 ID {cluster_id} 不存在")
 
-            # 模拟集群检测逻辑
-            status, node_info, memory_info, storage_info = await self._perform_cluster_check(cluster)
+            # 使用真实的节点发现逻辑，而不是模拟数据
+            web_api_config = cluster.config.get('webApiConfig')  # 注意字段名
+            if not web_api_config:
+                # 尝试从旧格式中获取
+                web_api_config = cluster.config.get('web_api_config')
 
-            # 更新状态
-            cluster.update_status_info(status, node_info, memory_info, storage_info)
-            await db.commit()
-            await db.refresh(cluster)
+            if not web_api_config:
+                raise ValueError("集群缺少Web API配置信息")
 
-            return cluster.to_dict()
+            # 调用真实的节点发现逻辑
+            discovery_result = await self.node_discovery.discover_cluster_nodes(
+                cluster.cluster_type.value, web_api_config
+            )
+
+            if discovery_result.get('success'):
+                # 使用真实发现的数据更新集群信息
+                nodes = discovery_result.get('nodes', [])
+                cluster_info = discovery_result.get('cluster_info', {})
+
+                total_nodes = len(nodes)
+                active_nodes = len([n for n in nodes if n.get('status') == 'active'])
+
+                # 计算真实的存储信息
+                total_capacity = cluster_info.get('total_capacity', 0)
+                used_capacity = cluster_info.get('used_capacity', 0)
+                storage_info = f"{used_capacity / (1024 ** 3):.1f}GB/{total_capacity / (1024 ** 3):.1f}GB" if total_capacity > 0 else "0GB/0GB"
+
+                # 更新集群状态
+                cluster.status = ClusterStatus.ACTIVE
+                cluster.node_count = f"{active_nodes}/{total_nodes}"
+                cluster.storage_info = storage_info
+                cluster.check_datetime = datetime.now()
+
+                # 更新配置信息
+                updated_config = cluster.config.copy()
+                updated_config['discovered_nodes'] = nodes
+                updated_config['cluster_info'] = cluster_info
+                updated_config['last_discovery'] = datetime.now().isoformat()
+                cluster.config = updated_config
+
+                await db.commit()
+                await db.refresh(cluster)
+
+                return {
+                    'success': True,
+                    'cluster': cluster.to_dict(),
+                    'message': '集群检测成功，已更新最新状态'
+                }
+            else:
+                cluster.status = ClusterStatus.ERROR
+                cluster.check_datetime = datetime.now()
+                await db.commit()
+
+                return {
+                    'success': False,
+                    'error': discovery_result.get('error'),
+                    'message': '集群检测失败'
+                }
 
         except Exception as e:
-            await db.rollback()
-            logger.error(f"检测集群失败: {e}")
+            logger.error(f"检测计算集群失败: {e}")
             raise
 
     async def set_default_cluster(self, db: AsyncSession, cluster_id: int) -> bool:
@@ -351,18 +400,20 @@ class UserClusterService:
             }
 
     async def _perform_cluster_check(self, cluster: UserCluster) -> Tuple[ClusterStatus, str, str, str]:
-        """执行实际的集群检测"""
+        """执行实际的集群检测 - 使用真实逻辑"""
         try:
-            # 这里应该根据集群类型实现真实的检测逻辑
-            # 目前返回模拟数据
-            await asyncio.sleep(1)  # 模拟检测时间
-
-            if cluster.cluster_type == ClusterType.YARN:
-                return ClusterStatus.ACTIVE, "2/3", "32GB/64GB", "1.2TB/2TB"
-            elif cluster.cluster_type == ClusterType.KUBERNETES:
-                return ClusterStatus.ACTIVE, "5/5", "64GB/128GB", "2.5TB/5TB"
+            # 调用真实的检测逻辑
+            result = await self.check_cluster(db, cluster.id)
+            if result['success']:
+                cluster_data = result['cluster']
+                return (
+                    ClusterStatus.ACTIVE,
+                    cluster_data['node'],
+                    cluster_data['memory'],
+                    cluster_data['storage']
+                )
             else:
-                return ClusterStatus.ACTIVE, "1/1", "16GB/32GB", "500GB/1TB"
+                return ClusterStatus.ERROR, "0/0", "0GB", "0GB"
 
         except Exception as e:
             logger.error(f"集群检测失败: {e}")
@@ -371,11 +422,119 @@ class UserClusterService:
     async def _check_cluster_status(self, cluster_id: int):
         """后台异步检测集群状态"""
         try:
-            # 这里应该实现真实的异步检测逻辑
-            await asyncio.sleep(3)  # 模拟检测延迟
-            logger.info(f"后台检测集群 {cluster_id} 完成")
+            # 创建新的数据库会话用于后台任务
+            async with AsyncSession(self.db_engine) as db:
+                # 获取集群信息
+                result = await db.execute(
+                    select(UserCluster).where(UserCluster.id == cluster_id)
+                )
+                cluster = result.scalar_one_or_none()
+
+                if not cluster:
+                    logger.error(f"后台检测: 集群 ID {cluster_id} 不存在")
+                    return
+
+                logger.info(f"开始后台检测集群: {cluster.name} (ID: {cluster_id})")
+
+                # 获取Web API配置
+                web_api_config = None
+                if cluster.config:
+                    # 优先使用 webApiConfig
+                    web_api_config = cluster.config.get('webApiConfig')
+                    # 如果没有，尝试 web_api_config
+                    if not web_api_config:
+                        web_api_config = cluster.config.get('web_api_config')
+
+                if not web_api_config:
+                    logger.error(f"集群 {cluster.name} 的配置: {cluster.config}")
+                    raise ValueError("集群缺少Web API配置信息")
+                logger.info(f"使用配置检测集群 {cluster.name}: {web_api_config}")
+                # 执行真实的集群检测
+                try:
+                    discovery_result = await asyncio.wait_for(
+                        self.node_discovery.discover_cluster_nodes(
+                            cluster.cluster_type.value,
+                            web_api_config
+                        ),
+                        timeout=60  # 60秒超时
+                    )
+
+                    if discovery_result.get('success'):
+                        # 更新集群状态为可用
+                        nodes = discovery_result.get('nodes', [])
+                        cluster_info = discovery_result.get('cluster_info', {})
+
+                        total_nodes = len(nodes)
+                        active_nodes = len([n for n in nodes if n.get('status') == 'active'])
+
+                        # 计算存储信息
+                        total_capacity = cluster_info.get('total_capacity', 0)
+                        used_capacity = cluster_info.get('used_capacity', 0)
+
+                        storage_info = f"{used_capacity / (1024 ** 3):.1f}GB/{total_capacity / (1024 ** 3):.1f}GB" if total_capacity > 0 else "未知"
+
+                        # 更新集群状态
+                        cluster.status = ClusterStatus.ACTIVE
+                        cluster.node_count = f"{active_nodes}/{total_nodes}"
+                        cluster.storage_info = storage_info
+                        cluster.check_datetime = datetime.now()
+
+                        # 更新配置信息
+                        updated_config = cluster.config.copy()
+                        updated_config['discovered_nodes'] = nodes
+                        updated_config['cluster_info'] = cluster_info
+                        updated_config['last_discovery'] = datetime.now().isoformat()
+                        cluster.config = updated_config
+
+                        await db.commit()
+
+                        logger.info(f"后台检测成功: 集群 {cluster.name} 状态正常，{active_nodes}/{total_nodes} 节点可用")
+
+                        # 发送成功通知（如果需要）
+                        await self._send_cluster_alert(cluster_id, "集群检测成功",
+                                                       f"发现 {active_nodes}/{total_nodes} 个节点")
+
+                    else:
+                        # 检测失败，更新状态
+                        cluster.status = ClusterStatus.ERROR
+                        cluster.check_datetime = datetime.now()
+                        await db.commit()
+
+                        error_msg = discovery_result.get('error', '未知错误')
+                        logger.error(f"后台检测失败: 集群 {cluster.name} - {error_msg}")
+
+                        # 发送失败告警
+                        await self._send_cluster_alert(cluster_id, "集群检测失败", error_msg)
+
+                except asyncio.TimeoutError:
+                    # 检测超时
+                    cluster.status = ClusterStatus.ERROR
+                    cluster.check_datetime = datetime.now()
+                    await db.commit()
+
+                    error_msg = "集群检测超时"
+                    logger.error(f"后台检测超时: 集群 {cluster.name}")
+                    await self._send_cluster_alert(cluster_id, "集群检测超时", error_msg)
+
         except Exception as e:
             logger.error(f"后台检测集群 {cluster_id} 失败: {e}")
+
+            # 尝试更新数据库状态为错误
+            try:
+                async with AsyncSession(self.db_engine) as db:
+                    result = await db.execute(
+                        select(UserCluster).where(UserCluster.id == cluster_id)
+                    )
+                    cluster = result.scalar_one_or_none()
+                    if cluster:
+                        cluster.status = ClusterStatus.ERROR
+                        cluster.check_datetime = datetime.now()
+                        await db.commit()
+            except Exception as db_error:
+                logger.error(f"更新集群状态失败: {db_error}")
+
+            # 发送异常告警
+            await self._send_cluster_alert(cluster_id, "集群检测异常", str(e))
 
     async def rediscover_cluster_nodes(self, db: AsyncSession, cluster_id: int) -> Dict:
         """重新发现集群节点"""
@@ -428,13 +587,82 @@ class UserClusterService:
             raise
 
     async def _update_cluster_nodes_info(self, cluster_id: int, discovery_result: Dict):
-        """后台更新集群节点信息"""
+        """后台更新集群节点信息到数据库"""
         try:
-            # 这里可以实现将发现的节点信息存储到数据库
-            # 或执行其他后台任务
-            logger.info(f"后台更新集群 {cluster_id} 节点信息完成")
+            # 创建新的数据库会话用于后台任务
+            async with AsyncSession(self.db_engine) as db:
+                # 获取集群信息
+                result = await db.execute(
+                    select(UserCluster).where(UserCluster.id == cluster_id)
+                )
+                cluster = result.scalar_one_or_none()
+
+                if not cluster:
+                    logger.error(f"集群 ID {cluster_id} 不存在")
+                    return
+
+                # 更新集群配置信息
+                updated_config = cluster.config.copy() if cluster.config else {}
+                updated_config['discovered_nodes'] = discovery_result.get('nodes', [])
+                updated_config['cluster_info'] = discovery_result.get('cluster_info', {})
+                updated_config['last_discovery'] = datetime.now().isoformat()
+                updated_config['discovery_method'] = 'background_update'
+
+                # 计算并更新集群统计信息
+                nodes = discovery_result.get('nodes', [])
+                cluster_info = discovery_result.get('cluster_info', {})
+
+                total_nodes = len(nodes)
+                active_nodes = len([n for n in nodes if n.get('status') == 'active'])
+
+                # 计算存储信息
+                total_capacity = cluster_info.get('total_capacity', 0)
+                used_capacity = cluster_info.get('used_capacity', 0)
+                free_capacity = cluster_info.get('free_capacity', 0)
+
+                if total_capacity > 0:
+                    storage_info = f"{used_capacity / (1024 ** 3):.1f}GB/{total_capacity / (1024 ** 3):.1f}GB"
+                else:
+                    storage_info = "未知"
+
+                # 计算内存信息（如果有的话）
+                memory_info = "0GB"  # 默认值，可以根据实际节点信息计算
+                if nodes:
+                    total_memory = 0
+                    used_memory = 0
+                    memory_count = 0
+
+                    for node in nodes:
+                        if node.get('memory_total'):
+                            total_memory += node.get('memory_total', 0)
+                            used_memory += node.get('memory_used', 0)
+                            memory_count += 1
+
+                    if memory_count > 0:
+                        memory_info = f"{used_memory / (1024 ** 3):.1f}GB/{total_memory / (1024 ** 3):.1f}GB"
+
+                # 更新集群信息
+                cluster.config = updated_config
+                cluster.node_count = f"{active_nodes}/{total_nodes}"
+                cluster.storage_info = storage_info
+                cluster.memory_info = memory_info
+                cluster.status = ClusterStatus.ACTIVE if discovery_result.get('success') else ClusterStatus.ERROR
+                cluster.updated_at = datetime.now()
+
+                await db.commit()
+
+                logger.info(
+                    f"成功更新集群 {cluster.name} (ID: {cluster_id}) 的节点信息: {active_nodes}/{total_nodes} 节点")
+
+                # 可选: 清理旧的缓存
+                cache_key = f"cluster_detail_{cluster_id}"
+                if hasattr(self, 'cache_service'):
+                    await self.cache_service.delete(cache_key)
+
         except Exception as e:
-            logger.error(f"后台更新集群节点信息失败: {e}")
+            logger.error(f"后台更新集群 {cluster_id} 节点信息失败: {e}")
+            # 可以在这里添加告警通知
+            await self._send_cluster_alert(cluster_id, "节点信息更新失败", str(e))
 
     async def get_cluster_nodes_detail(self, db: AsyncSession, cluster_id: int) -> Dict:
         """获取集群节点详细信息"""
@@ -537,6 +765,24 @@ class UserClusterService:
                 'discovery_method': 'Frontend HTTP API'
             }
         }
+
+    async def _send_cluster_alert(self, cluster_id: int, alert_type: str, message: str):
+        """发送集群告警通知"""
+        try:
+            # 这里可以集成你的告警系统
+            logger.warning(f"集群告警 [ID: {cluster_id}] {alert_type}: {message}")
+
+            # 示例：发送到告警系统
+            # await self.alert_service.send_alert({
+            #     'cluster_id': cluster_id,
+            #     'alert_type': alert_type,
+            #     'message': message,
+            #     'timestamp': datetime.now().isoformat(),
+            #     'severity': 'warning' if '成功' in alert_type else 'error'
+            # })
+
+        except Exception as e:
+            logger.error(f"发送集群告警失败: {e}")
 
 
 # 创建全局服务实例
