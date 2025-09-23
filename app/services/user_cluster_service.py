@@ -22,6 +22,8 @@ class UserClusterService:
 
     def __init__(self):
         self.node_discovery = WebApiClusterDiscovery()
+        from app.utils.database import async_engine
+        self.db_engine = async_engine
 
     async def get_clusters_list(
             self,
@@ -141,16 +143,60 @@ class UserClusterService:
             total_capacity = cluster_info.get('total_capacity', 0)
             used_capacity = cluster_info.get('used_capacity', 0)
 
-            storage_info = f"{used_capacity / (1024 ** 3):.1f}GB/{total_capacity / (1024 ** 3):.1f}GB" if total_capacity > 0 else "未知"
+            # 修复存储和内存信息显示逻辑
+            if cluster_type_enum == ClusterType.DORIS:
+                # Doris: 存储用容量，内存用JVM堆内存
+                storage_info = f"{used_capacity / (1024 ** 3):.1f}GB/{total_capacity / (1024 ** 3):.1f}GB" if total_capacity > 0 else "0GB/0GB"
 
+                # 计算 Frontend JVM 内存汇总
+                total_heap_memory = 0
+                used_heap_memory = 0
+                for node in nodes:
+                    if node.get('role') == 'Frontend':
+                        total_heap_memory += node.get('jvm_heap_max', 0)
+                        used_heap_memory += node.get('jvm_heap_used', 0)
+
+                memory_info = f"{used_heap_memory / (1024 ** 3):.1f}GB/{total_heap_memory / (1024 ** 3):.1f}GB" if total_heap_memory > 0 else "0GB/0GB"
+
+            elif cluster_type_enum == ClusterType.FLINK:
+                # Flink: 显示内存而不是存储（因为Flink不是存储系统）
+                total_memory = cluster_info.get('total_memory', 0)
+                used_memory = cluster_info.get('used_memory', 0)
+                storage_info = f"{used_memory / (1024 ** 3):.1f}GB/{total_memory / (1024 ** 3):.1f}GB" if total_memory > 0 else "0GB/0GB"
+                memory_info = storage_info  # Flink的存储字段实际显示内存
+
+            elif cluster_type_enum == ClusterType.HADOOP:
+                # Hadoop: 存储用HDFS容量，内存用NameNode JVM内存
+                storage_info = f"{used_capacity / (1024 ** 3):.1f}GB/{total_capacity / (1024 ** 3):.1f}GB" if total_capacity > 0 else "未知"
+
+                # 使用NameNode的JVM内存
+                namenode_heap_used = cluster_info.get('namenode_jvm_heap_used', 0)
+                namenode_heap_max = cluster_info.get('namenode_jvm_heap_max', 0)
+                memory_info = f"{namenode_heap_used / (1024 ** 3):.1f}GB/{namenode_heap_max / (1024 ** 3):.1f}GB" if namenode_heap_max > 0 else "0GB/0GB"
+
+            else:
+                storage_info = "未知"
+                memory_info = "0GB/0GB"
             # 构建URL
             web_ui_url = None
             master_url = None
+
             if cluster_type == 'hadoop' and web_api_config:
                 namenode_host = web_api_config.get('namenode_host')
                 namenode_port = web_api_config.get('namenode_web_port', 9870)
                 web_ui_url = f"http://{namenode_host}:{namenode_port}"
                 master_url = f"hdfs://{namenode_host}:9000"
+            elif cluster_type == 'flink' and web_api_config:
+                jm_host = web_api_config.get('jobmanager_host')
+                jm_port = web_api_config.get('jobmanager_web_port', 8081)
+                web_ui_url = f"http://{jm_host}:{jm_port}"
+                master_url = f"flink://{jm_host}:6123"
+            elif cluster_type == 'doris' and web_api_config:
+                fe_host = web_api_config.get('frontend_host')
+                fe_web_port = web_api_config.get('frontend_web_port', 8060)
+                fe_query_port = 9030  # Doris 查询端口
+                web_ui_url = f"http://{fe_host}:{fe_web_port}"
+                master_url = f"mysql://{fe_host}:{fe_query_port}"
 
             new_cluster = UserCluster(
                 name=name,
@@ -174,75 +220,127 @@ class UserClusterService:
 
             logger.info(f"成功添加集群: {name}")
 
-            # 6. 返回结果包含发现的节点信息
-            result = new_cluster.to_dict()
-            if discovery_result.get('success'):
-                result['discovered_nodes'] = discovery_result['nodes']
-                result['cluster_info'] = discovery_result['cluster_info']
+            # 启动后台任务更新节点信息 - 修改这里
+            if auto_discovery and discovery_result.get('success', False):
+                # 使用修复后的方法名
+                asyncio.create_task(self._update_cluster_nodes_info_background(new_cluster.id))
 
-            return result
+            return new_cluster.to_dict()
 
         except Exception as e:
             await db.rollback()
             logger.error(f"添加集群失败: {e}")
             raise
 
-    async def update_cluster(
-            self,
-            db: AsyncSession,
-            cluster_id: int,
-            name: str = None,
-            cluster_type: str = None,
-            remark: str = None,
-            config: Dict = None
-    ) -> Dict:
-        """更新集群信息"""
+    async def _update_cluster_nodes_info_background(self, cluster_id: int):
+        """后台更新集群节点信息的包装方法"""
         try:
-            # 获取集群
+            # 延迟几秒再执行，确保事务完成
+            await asyncio.sleep(2)
+
+            # 创建新的数据库会话
+            from app.utils.database import async_session_maker
+            async with async_session_maker() as db:
+                await self._update_cluster_nodes_info_fixed(db, cluster_id)
+
+        except Exception as e:
+            logger.error(f"后台更新集群 {cluster_id} 节点信息失败: {e}")
+
+    async def _update_cluster_nodes_info_fixed(self, db: AsyncSession, cluster_id: int):
+        """修复的集群节点信息更新方法"""
+        try:
+            # 获取集群信息
+            from sqlalchemy import select
+            from app.models.cluster import UserCluster, ClusterStatus
+
             result = await db.execute(
                 select(UserCluster).where(UserCluster.id == cluster_id)
             )
             cluster = result.scalar_one_or_none()
 
             if not cluster:
-                raise ValueError(f"集群 ID {cluster_id} 不存在")
+                logger.error(f"后台更新: 集群 ID {cluster_id} 不存在")
+                return
 
-            # 检查名称重复（如果更改了名称）
-            if name and name != cluster.name:
-                existing = await db.execute(
-                    select(UserCluster).where(
-                        and_(UserCluster.name == name, UserCluster.id != cluster_id)
-                    )
+            logger.info(f"开始后台更新集群节点信息: {cluster.name} (ID: {cluster_id})")
+
+            # 获取Web API配置
+            web_api_config = cluster.config.get('webApiConfig')
+            if not web_api_config:
+                web_api_config = cluster.config.get('web_api_config')
+
+            # 兼容现有数据结构
+            if not web_api_config:
+                if 'namenode_host' in cluster.config:
+                    web_api_config = {
+                        'namenode_host': cluster.config.get('namenode_host'),
+                        'namenode_web_port': cluster.config.get('namenode_web_port'),
+                        'namenode_ha_hosts': cluster.config.get('namenode_ha_hosts'),
+                        'journalnode_hosts': cluster.config.get('journalnode_hosts')
+                    }
+                elif 'frontend_host' in cluster.config:
+                    web_api_config = {
+                        'frontend_host': cluster.config.get('frontend_host'),
+                        'frontend_web_port': cluster.config.get('frontend_web_port'),
+                        'username': cluster.config.get('username'),
+                        'password': cluster.config.get('password')
+                    }
+
+            if not web_api_config:
+                raise ValueError("集群缺少Web API配置信息")
+
+            logger.info(f"使用配置更新集群 {cluster.name}: {web_api_config}")
+
+            # 执行真实的集群检测
+            try:
+                discovery_result = await asyncio.wait_for(
+                    self.node_discovery.discover_cluster_nodes(
+                        cluster.cluster_type.value,
+                        web_api_config
+                    ),
+                    timeout=60  # 60秒超时
                 )
-                if existing.scalar_one_or_none():
-                    raise ValueError(f"集群名称 '{name}' 已存在")
-                cluster.name = name
 
-            # 更新其他字段
-            if cluster_type:
-                try:
-                    cluster.cluster_type = ClusterType(cluster_type)
-                except ValueError:
-                    raise ValueError(f"不支持的集群类型: {cluster_type}")
+                if discovery_result.get('success'):
+                    # 更新集群状态
+                    nodes = discovery_result.get('nodes', [])
+                    cluster_info = discovery_result.get('cluster_info', {})
 
-            if remark is not None:
-                cluster.remark = remark
+                    total_nodes = len(nodes)
+                    active_nodes = len([n for n in nodes if n.get('status') == 'active'])
 
-            if config is not None:
-                cluster.config = config
+                    # 更新集群信息
+                    cluster.status = ClusterStatus.ACTIVE
+                    cluster.node_count = f"{active_nodes}/{total_nodes}"
+                    cluster.check_datetime = datetime.now()
 
-            cluster.updated_at = datetime.now()
+                    # 更新配置信息
+                    updated_config = cluster.config.copy()
+                    updated_config['discovered_nodes'] = nodes
+                    updated_config['cluster_info'] = cluster_info
+                    updated_config['last_discovery'] = datetime.now().isoformat()
+                    cluster.config = updated_config
 
-            await db.commit()
-            await db.refresh(cluster)
+                    await db.commit()
+                    logger.info(f"成功更新集群 {cluster.name} 的节点信息")
 
-            logger.info(f"成功更新集群: {cluster.name}")
-            return cluster.to_dict()
+                else:
+                    error_msg = discovery_result.get('error', '未知错误')
+                    logger.error(f"集群 {cluster.name} 节点发现失败: {error_msg}")
+
+                    cluster.status = ClusterStatus.ERROR
+                    await db.commit()
+
+            except asyncio.TimeoutError:
+                logger.error(f"集群 {cluster.name} 节点发现超时")
+                cluster.status = ClusterStatus.ERROR
+                await db.commit()
 
         except Exception as e:
+            logger.error(f"后台更新集群 {cluster_id} 节点信息失败: {e}")
             await db.rollback()
-            logger.error(f"更新集群失败: {e}")
-            raise
+            # 发送告警
+            await self._send_cluster_alert(cluster_id, "节点信息更新失败", str(e))
 
     async def delete_cluster(self, db: AsyncSession, cluster_id: int) -> bool:
         """删除集群"""
@@ -279,10 +377,32 @@ class UserClusterService:
                 raise ValueError(f"集群 ID {cluster_id} 不存在")
 
             # 使用真实的节点发现逻辑，而不是模拟数据
-            web_api_config = cluster.config.get('webApiConfig')  # 注意字段名
+            web_api_config = cluster.config.get('webApiConfig')
             if not web_api_config:
-                # 尝试从旧格式中获取
                 web_api_config = cluster.config.get('web_api_config')
+
+            # 如果还是没有，检查是否配置直接存储在根级别
+            if not web_api_config:
+                # 检查根级别是否包含namenode_host等关键字段
+                if 'namenode_host' in cluster.config:
+                    web_api_config = {
+                        'namenode_host': cluster.config.get('namenode_host'),
+                        'namenode_web_port': cluster.config.get('namenode_web_port'),
+                        'namenode_ha_hosts': cluster.config.get('namenode_ha_hosts'),
+                        'journalnode_hosts': cluster.config.get('journalnode_hosts')
+                    }
+                elif 'frontend_host' in cluster.config:
+                    web_api_config = {
+                        'frontend_host': cluster.config.get('frontend_host'),
+                        'frontend_web_port': cluster.config.get('frontend_web_port'),
+                        'username': cluster.config.get('username'),
+                        'password': cluster.config.get('password')
+                    }
+                elif 'jobmanager_host' in cluster.config:
+                    web_api_config = {
+                        'jobmanager_host': cluster.config.get('jobmanager_host'),
+                        'jobmanager_web_port': cluster.config.get('jobmanager_web_port', 8081)
+                    }
 
             if not web_api_config:
                 raise ValueError("集群缺少Web API配置信息")
@@ -300,15 +420,51 @@ class UserClusterService:
                 total_nodes = len(nodes)
                 active_nodes = len([n for n in nodes if n.get('status') == 'active'])
 
-                # 计算真实的存储信息
+                # 计算真实的存储和内存信息 - 修改这里
                 total_capacity = cluster_info.get('total_capacity', 0)
                 used_capacity = cluster_info.get('used_capacity', 0)
-                storage_info = f"{used_capacity / (1024 ** 3):.1f}GB/{total_capacity / (1024 ** 3):.1f}GB" if total_capacity > 0 else "0GB/0GB"
+
+                # 根据集群类型计算存储和内存信息
+                if cluster.cluster_type == ClusterType.DORIS:
+                    # Doris: 存储用容量，内存用JVM堆内存
+                    storage_info = f"{used_capacity / (1024 ** 3):.1f}GB/{total_capacity / (1024 ** 3):.1f}GB" if total_capacity > 0 else "0GB/0GB"
+
+                    # 计算 Frontend JVM 内存汇总
+                    total_heap_memory = 0
+                    used_heap_memory = 0
+                    for node in nodes:
+                        if node.get('role') == 'Frontend':
+                            total_heap_memory += node.get('jvm_heap_max', 0)
+                            used_heap_memory += node.get('jvm_heap_used', 0)
+
+                    memory_info = f"{used_heap_memory / (1024 ** 3):.1f}GB/{total_heap_memory / (1024 ** 3):.1f}GB" if total_heap_memory > 0 else "0GB/0GB"
+
+                elif cluster.cluster_type == ClusterType.FLINK:
+                    # Flink: 显示内存而不是存储
+                    total_memory = cluster_info.get('total_memory', 0)
+                    used_memory = cluster_info.get('used_memory', 0)
+                    storage_info = f"{used_memory / (1024 ** 3):.1f}GB/{total_memory / (1024 ** 3):.1f}GB" if total_memory > 0 else "0GB/0GB"
+                    memory_info = storage_info  # Flink的存储字段实际显示内存
+
+                elif cluster.cluster_type == ClusterType.HADOOP:
+                    # Hadoop: 存储用HDFS容量，内存用NameNode JVM内存
+                    storage_info = f"{used_capacity / (1024 ** 3):.1f}GB/{total_capacity / (1024 ** 3):.1f}GB" if total_capacity > 0 else "未知"
+
+                    # 使用NameNode的JVM内存
+                    namenode_heap_used = cluster_info.get('namenode_jvm_heap_used', 0)
+                    namenode_heap_max = cluster_info.get('namenode_jvm_heap_max', 0)
+                    memory_info = f"{namenode_heap_used / (1024 ** 3):.1f}GB/{namenode_heap_max / (1024 ** 3):.1f}GB" if namenode_heap_max > 0 else "0GB/0GB"
+
+                else:
+                    storage_info = "0GB/0GB"
+                    memory_info = "0GB/0GB"
 
                 # 更新集群状态
                 cluster.status = ClusterStatus.ACTIVE
                 cluster.node_count = f"{active_nodes}/{total_nodes}"
                 cluster.storage_info = storage_info
+                # 重要：添加内存信息的更新
+                cluster.memory_info = memory_info
                 cluster.check_datetime = datetime.now()
 
                 # 更新配置信息

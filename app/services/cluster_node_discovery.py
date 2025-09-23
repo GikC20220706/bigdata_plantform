@@ -85,6 +85,17 @@ class WebApiClusterDiscovery:
                     cluster_info = await self._get_hadoop_cluster_info(session, namenode_host, namenode_port, config)
                     datanodes = await self._get_hadoop_datanodes_enhanced(session, namenode_host, namenode_port, config)
 
+                namenode_metrics = await self._get_hadoop_jvm_metrics(session, namenode_host, namenode_port, config)
+
+                # 合并集群信息，添加内存数据
+                if namenode_metrics:
+                    cluster_info.update({
+                        'namenode_jvm_heap_used': namenode_metrics.get('jvm_heap_used', 0),
+                        'namenode_jvm_heap_max': namenode_metrics.get('jvm_heap_max', 0),
+                        'namenode_system_total_memory': namenode_metrics.get('system_total_memory', 0),
+                        'namenode_system_free_memory': namenode_metrics.get('system_free_memory', 0)
+                    })
+
                 # 3. 发现JournalNode
                 journalnodes = await self._discover_journalnodes(session, config)
 
@@ -346,10 +357,36 @@ class WebApiClusterDiscovery:
                 # 1. 获取集群概览
                 cluster_info = await self._get_flink_cluster_info(session, jm_host, jm_port)
 
-                # 2. 获取TaskManager列表
+                # 2. 获取JobManager JVM指标
+                jobmanager_metrics = await self._get_jobmanager_metrics(session, jm_host, jm_port)
+
+                # 3. 获取TaskManager列表
                 task_managers = await self._get_flink_taskmanagers(session, jm_host, jm_port)
 
-                # 3. 添加JobManager信息
+                # 4. 计算总体资源信息
+                total_memory = 0
+                total_slots = 0
+                used_memory = 0
+                system_memory = 0
+
+                for node in task_managers:
+                    total_memory += node.get('physical_memory', 0)
+                    total_slots += node.get('slots_total', 0)
+                    used_memory += node.get('memory_heap_used', 0)
+                    # 从物理内存计算系统总内存
+                    system_memory += node.get('physical_memory', 0)
+
+                cluster_info.update({
+                    'total_memory': total_memory,
+                    'used_memory': used_memory,
+                    'total_slots': total_slots,
+                    'system_total_memory': system_memory,
+                    # 添加JobManager的内存信息
+                    'jobmanager_heap_used': jobmanager_metrics.get('heap_used', 0),
+                    'jobmanager_heap_max': jobmanager_metrics.get('heap_max', 0)
+                })
+
+                # 5. 创建JobManager节点，包含内存信息
                 nodes = [{
                     'hostname': jm_host,
                     'ip_address': jm_host,
@@ -358,10 +395,12 @@ class WebApiClusterDiscovery:
                     'status': 'active',
                     'services': ['JobManager'],
                     'web_ports': {'jobmanager': jm_port},
+                    'memory_heap_used': jobmanager_metrics.get('heap_used', 0),
+                    'memory_heap_max': jobmanager_metrics.get('heap_max', 0),
                     'discovery_method': 'flink_web_api'
                 }]
 
-                # 4. 添加TaskManager信息
+                # 6. 添加TaskManager信息
                 nodes.extend(task_managers)
 
                 return {
@@ -376,6 +415,33 @@ class WebApiClusterDiscovery:
                 logger.error(f"Flink集群发现失败: {e}")
                 raise
 
+    async def _get_jobmanager_metrics(self, session: aiohttp.ClientSession, host: str, port: int) -> Dict:
+        """获取JobManager的JVM指标"""
+        try:
+            metrics_url = f"http://{host}:{port}/jobmanager/metrics"
+            params = {
+                'get': 'Status.JVM.Memory.Heap.Used,Status.JVM.Memory.Heap.Max'
+            }
+
+            async with session.get(metrics_url, params=params) as response:
+                response.raise_for_status()
+                metrics_data = await response.json()
+
+                metrics = {}
+                for metric in metrics_data:
+                    metric_id = metric.get('id', '')
+                    value = metric.get('value', 0)
+
+                    if 'Memory.Heap.Used' in metric_id:
+                        metrics['heap_used'] = int(value)
+                    elif 'Memory.Heap.Max' in metric_id:
+                        metrics['heap_max'] = int(value)
+
+                return metrics
+
+        except Exception as e:
+            logger.debug(f"获取 JobManager 指标失败: {e}")
+            return {}
     async def _get_flink_cluster_info(self, session: aiohttp.ClientSession, host: str, port: int) -> Dict:
         """获取Flink集群信息"""
         try:
@@ -400,74 +466,184 @@ class WebApiClusterDiscovery:
             return {}
 
     async def _get_flink_taskmanagers(self, session: aiohttp.ClientSession, host: str, port: int) -> List[Dict]:
-        """获取Flink TaskManager列表"""
+        """获取Flink TaskManager列表 - 增强版本包含详细资源信息"""
         nodes = []
         try:
+            # 1. 获取 TaskManager 基础信息
             url = f"http://{host}:{port}/taskmanagers"
             async with session.get(url) as response:
                 response.raise_for_status()
                 data = await response.json()
 
                 taskmanagers = data.get('taskmanagers', [])
+
+                # 2. 为每个 TaskManager 获取详细指标
                 for tm in taskmanagers:
-                    nodes.append({
+                    tm_id = tm.get('id')
+                    tm_host = tm.get('path', '').split('@')[-1].split(':')[0] if '@' in tm.get('path', '') else ''
+
+                    # 获取该 TaskManager 的详细指标
+                    tm_metrics = await self._get_taskmanager_metrics(session, host, port, tm_id)
+
+                    node_info = {
                         'hostname': tm.get('path', '').split('@')[-1] if '@' in tm.get('path', '') else '',
-                        'ip_address': tm.get('path', '').split('@')[-1].split(':')[0] if '@' in tm.get('path',
-                                                                                                       '') else '',
+                        'ip_address': tm_host,
                         'role': 'TaskManager',
                         'node_type': 'worker',
                         'status': 'active',
                         'services': ['TaskManager'],
-                        'task_manager_id': tm.get('id'),
+                        'task_manager_id': tm_id,
                         'slots_total': tm.get('slotsNumber', 0),
                         'slots_free': tm.get('freeSlots', 0),
-                        'cpu_cores': tm.get('hardware', {}).get('cpuCores', 0),
-                        'physical_memory': tm.get('hardware', {}).get('physicalMemory', 0),
-                        'free_memory': tm.get('hardware', {}).get('freeMemory', 0),
-                        'managed_memory': tm.get('hardware', {}).get('managedMemory', 0),
                         'discovery_method': 'flink_web_api'
-                    })
+                    }
+
+                    # 添加硬件信息
+                    hardware = tm.get('hardware', {})
+                    if hardware:
+                        node_info.update({
+                            'cpu_cores': hardware.get('cpuCores', 0),
+                            'physical_memory': hardware.get('physicalMemory', 0),
+                            'free_memory': hardware.get('freeMemory', 0),
+                            'managed_memory': hardware.get('managedMemory', 0),
+                            'network_memory': hardware.get('networkMemory', 0)
+                        })
+
+                    # 添加实时指标
+                    if tm_metrics:
+                        node_info.update({
+                            'memory_heap_used': tm_metrics.get('memory_heap_used', 0),
+                            'memory_heap_max': tm_metrics.get('memory_heap_max', 0),
+                            'memory_non_heap_used': tm_metrics.get('memory_non_heap_used', 0),
+                            'cpu_load': tm_metrics.get('cpu_load', 0),
+                            'gc_count': tm_metrics.get('gc_count', 0),
+                            'gc_time': tm_metrics.get('gc_time', 0)
+                        })
+
+                    nodes.append(node_info)
+
         except Exception as e:
             logger.warning(f"获取TaskManager列表失败: {e}")
 
         return nodes
+
+    async def _get_taskmanager_metrics(self, session: aiohttp.ClientSession, host: str, port: int, tm_id: str) -> Dict:
+        """获取特定 TaskManager 的详细指标"""
+        try:
+            # Flink 提供的指标端点
+            metrics_url = f"http://{host}:{port}/taskmanagers/{tm_id}/metrics"
+
+            # 请求特定的指标
+            params = {
+                'get': ','.join([
+                    'Status.JVM.Memory.Heap.Used',
+                    'Status.JVM.Memory.Heap.Max',
+                    'Status.JVM.Memory.NonHeap.Used',
+                    'Status.JVM.Memory.NonHeap.Max',
+                    'Status.JVM.CPU.Load',
+                    'Status.JVM.GarbageCollector.G1-Young-Generation.Count',
+                    'Status.JVM.GarbageCollector.G1-Young-Generation.Time',
+                    'Status.Network.TotalMemorySegments',
+                    'Status.Network.AvailableMemorySegments'
+                ])
+            }
+
+            async with session.get(metrics_url, params=params) as response:
+                response.raise_for_status()
+                metrics_data = await response.json()
+
+                # 解析指标数据
+                metrics = {}
+                for metric in metrics_data:
+                    metric_id = metric.get('id', '')
+                    value = metric.get('value', 0)
+
+                    if 'Memory.Heap.Used' in metric_id:
+                        metrics['memory_heap_used'] = int(value)
+                    elif 'Memory.Heap.Max' in metric_id:
+                        metrics['memory_heap_max'] = int(value)
+                    elif 'Memory.NonHeap.Used' in metric_id:
+                        metrics['memory_non_heap_used'] = int(value)
+                    elif 'CPU.Load' in metric_id:
+                        metrics['cpu_load'] = float(value)
+                    elif 'GarbageCollector' in metric_id and 'Count' in metric_id:
+                        metrics['gc_count'] = int(value)
+                    elif 'GarbageCollector' in metric_id and 'Time' in metric_id:
+                        metrics['gc_time'] = int(value)
+
+                return metrics
+
+        except Exception as e:
+            logger.debug(f"获取 TaskManager {tm_id} 指标失败: {e}")
+            return {}
 
     # ====================================================================
     # Doris集群节点发现 - 通过Frontend Web UI
     # ====================================================================
 
     async def _discover_doris_cluster(self, config: Dict) -> Dict:
-        """发现Doris集群节点"""
+        """发现Doris集群节点 - 完全使用MySQL协议"""
         fe_host = config['frontend_host']
         fe_port = config.get('frontend_web_port', 8060)
         username = config.get('username', 'root')
         password = config.get('password', '')
 
-        async with aiohttp.ClientSession(timeout=self.timeout) as session:
-            try:
-                # 1. 获取集群基本信息
-                cluster_info = await self._get_doris_cluster_info(session, fe_host, fe_port, username, password)
+        try:
+            # 直接使用 MySQL 协议获取所有信息
+            frontends = await self._get_doris_frontends_via_mysql(fe_host, username, password)
+            backends = await self._get_doris_backends_via_mysql(fe_host, username, password)
 
-                # 2. 获取Frontend节点列表
-                frontends = await self._get_doris_frontends(session, fe_host, fe_port, username, password)
 
-                # 3. 获取Backend节点列表
-                backends = await self._get_doris_backends(session, fe_host, fe_port, username, password)
+            # 合并所有节点
+            nodes = frontends + backends
 
-                # 4. 合并所有节点
-                nodes = frontends + backends
+            cluster_info = {
+                'cluster_name': 'doris-cluster',
+                'master_node': fe_host,
+                'frontend_count': len(frontends),
+                'backend_count': len(backends),
+                'total_capacity': 0,
+                'used_capacity': 0
+            }
 
-                return {
-                    'success': True,
-                    'cluster_info': cluster_info,
-                    'nodes': nodes,
-                    'discovery_time': datetime.now().isoformat(),
-                    'total_nodes': len(nodes)
-                }
+            # 计算存储信息
+            total_capacity = 0
+            used_capacity = 0
+            total_memory = 0
+            used_memory = 0
 
-            except Exception as e:
-                logger.error(f"Doris集群发现失败: {e}")
-                raise
+            for be in backends:
+                total_capacity += be.get('total_capacity', 0)
+                used_capacity += be.get('used_capacity', 0)
+                total_memory += be.get('memory_total', 0)
+                used_memory += be.get('memory_allocated', 0)
+
+            active_backends = len([be for be in backends if be.get('status') == 'active'])
+            cluster_info.update({
+                'total_capacity': total_capacity,
+                'used_capacity': used_capacity,
+                'total_memory': total_memory,
+                'used_memory': used_memory,
+                'active_backends': active_backends,
+                'total_backends': len(backends)
+            })
+
+            return {
+                'success': True,
+                'cluster_info': cluster_info,
+                'nodes': nodes,
+                'discovery_time': datetime.now().isoformat(),
+                'total_nodes': len(nodes)
+            }
+
+        except Exception as e:
+            logger.error(f"Doris集群发现失败: {e}")
+            return {
+                'success': False,
+                'error': str(e),
+                'nodes': [],
+                'total_nodes': 0
+            }
 
     async def _get_doris_cluster_info(self, session: aiohttp.ClientSession, host: str, port: int, username: str,
                                       password: str) -> Dict:
@@ -490,76 +666,368 @@ class WebApiClusterDiscovery:
             logger.warning(f"获取Doris集群信息失败: {e}")
             return {}
 
-    async def _get_doris_frontends(self, session: aiohttp.ClientSession, host: str, port: int, username: str,
-                                   password: str) -> List[Dict]:
-        """获取Doris Frontend列表"""
-        nodes = []
+    # async def _get_doris_frontends(self, session: aiohttp.ClientSession, host: str, port: int, username: str,
+    #                                password: str) -> List[Dict]:
+    #     """获取Doris Frontend列表 - 使用正确的端点"""
+    #     nodes = []
+    #     try:
+    #         auth = aiohttp.BasicAuth(username, password) if username else None
+    #
+    #         # 尝试多个可能的端点
+    #         possible_endpoints = [
+    #             f"http://{host}:{port}/rest/v1/system?path=frontends",
+    #             f"http://{host}:{port}/api/rest/v1/system?path=frontends",
+    #             f"http://{host}:{port}/rest/v2/api/show_frontends",
+    #             f"http://{host}:{port}/api/show_frontends"
+    #         ]
+    #
+    #         for url in possible_endpoints:
+    #             try:
+    #                 async with session.get(url, auth=auth) as response:
+    #                     if response.status == 200:
+    #                         # 检查响应的 Content-Type
+    #                         content_type = response.headers.get('content-type', '')
+    #                         if 'application/json' in content_type:
+    #                             data = await response.json()
+    #                             frontends = data.get('data', [])
+    #                             for fe in frontends:
+    #                                 nodes.append({
+    #                                     'hostname': fe.get('Host', ''),
+    #                                     'ip_address': fe.get('Host', ''),
+    #                                     'role': 'Frontend',
+    #                                     'node_type': 'master' if fe.get('IsMaster') == 'true' else 'follower',
+    #                                     'status': 'active' if fe.get('Alive') == 'true' else 'inactive',
+    #                                     'services': ['Frontend'],
+    #                                     'discovery_method': 'doris_web_api'
+    #                                 })
+    #                             return nodes
+    #                         else:
+    #                             logger.warning(f"端点 {url} 返回非JSON响应，Content-Type: {content_type}")
+    #             except Exception as e:
+    #                 logger.debug(f"尝试端点 {url} 失败: {e}")
+    #                 continue
+    #
+    #         # 如果所有 REST API 都失败，尝试使用 MySQL 协议
+    #         logger.info("REST API 失败，尝试使用 MySQL 协议获取 Frontend 信息")
+    #         return await self._get_doris_frontends_via_mysql(host, username, password)
+    #
+    #     except Exception as e:
+    #         logger.warning(f"获取Doris Frontend列表失败: {e}")
+    #         return nodes
+    #
+    # async def _get_doris_backends(self, session: aiohttp.ClientSession, host: str, port: int, username: str,
+    #                               password: str) -> List[Dict]:
+    #     """获取Doris Backend列表"""
+    #     nodes = []
+    #     try:
+    #         auth = aiohttp.BasicAuth(username, password) if username else None
+    #
+    #         url = f"http://{host}:{port}/api/show_backends"
+    #         async with session.get(url, auth=auth) as response:
+    #             response.raise_for_status()
+    #             data = await response.json()
+    #
+    #             backends = data.get('data', [])
+    #             for be in backends:
+    #                 nodes.append({
+    #                     'hostname': be.get('Host', ''),
+    #                     'ip_address': be.get('Host', ''),
+    #                     'role': 'Backend',
+    #                     'node_type': 'worker',
+    #                     'status': 'active' if be.get('Alive') == 'true' else 'inactive',
+    #                     'services': ['Backend'],
+    #                     'heartbeat_port': be.get('HeartbeatPort'),
+    #                     'be_port': be.get('BePort'),
+    #                     'http_port': be.get('HttpPort'),
+    #                     'brpc_port': be.get('BrpcPort'),
+    #                     'version': be.get('Version'),
+    #                     'last_heartbeat': be.get('LastHeartbeat'),
+    #                     'total_capacity': be.get('TotalCapacity'),
+    #                     'used_capacity': be.get('UsedCapacity'),
+    #                     'available_capacity': be.get('AvailCapacity'),
+    #                     'discovery_method': 'doris_web_api'
+    #                 })
+    #     except Exception as e:
+    #         logger.warning(f"获取Doris Backend列表失败: {e}")
+    #
+    #     return nodes
+
+    async def _get_doris_backends_via_mysql(self, host: str, username: str, password: str) -> List[Dict]:
+        """通过 MySQL 协议获取 Backend 信息 - 增强版本"""
         try:
-            auth = aiohttp.BasicAuth(username, password) if username else None
+            import aiomysql
 
-            url = f"http://{host}:{port}/api/show_frontends"
-            async with session.get(url, auth=auth) as response:
-                response.raise_for_status()
-                data = await response.json()
+            connection = await aiomysql.connect(
+                host=host,
+                port=9030,
+                user=username,
+                password=password,
+                connect_timeout=10,
+                autocommit=True
+            )
 
-                frontends = data.get('data', [])
-                for fe in frontends:
-                    nodes.append({
-                        'hostname': fe.get('Host', ''),
-                        'ip_address': fe.get('Host', ''),
-                        'role': 'Frontend',
-                        'node_type': 'master' if fe.get('IsMaster') == 'true' else 'follower',
-                        'status': 'active' if fe.get('Alive') == 'true' else 'inactive',
-                        'services': ['Frontend'],
-                        'edit_log_port': fe.get('EditLogPort'),
-                        'http_port': fe.get('HttpPort'),
-                        'query_port': fe.get('QueryPort'),
-                        'rpc_port': fe.get('RpcPort'),
-                        'version': fe.get('Version'),
-                        'last_heartbeat': fe.get('LastHeartbeat'),
-                        'discovery_method': 'doris_web_api'
-                    })
+            cursor = await connection.cursor()
+
+            # 1. 获取 Backend 基础信息
+            await cursor.execute("SHOW BACKENDS")
+            results = await cursor.fetchall()
+            desc = cursor.description
+            columns = [col[0] for col in desc]
+
+            nodes = []
+            for row in results:
+                row_dict = dict(zip(columns, row))
+                is_alive = str(row_dict.get('Alive', '')).lower() == 'true'
+
+                # 2. 解析容量信息（Doris 返回的是字符串格式如 "100.000 GB"）
+                total_capacity_str = row_dict.get('TotalCapacity', '0')
+                used_capacity_str = row_dict.get('DataUsedCapacity', '0')
+                available_capacity_str = row_dict.get('AvailCapacity', '0')
+
+                # 转换容量为字节
+                total_capacity_bytes = self._parse_doris_capacity(total_capacity_str)
+                used_capacity_bytes = self._parse_doris_capacity(used_capacity_str)
+                available_capacity_bytes = self._parse_doris_capacity(available_capacity_str)
+
+                node_info = {
+                    'hostname': row_dict.get('Host', ''),
+                    'ip_address': row_dict.get('Host', ''),
+                    'role': 'Backend',
+                    'node_type': 'worker',
+                    'status': 'active' if is_alive else 'inactive',
+                    'services': ['Backend'],
+                    'backend_id': row_dict.get('BackendId'),
+                    'heartbeat_port': row_dict.get('HeartbeatPort'),
+                    'be_port': row_dict.get('BePort'),
+                    'http_port': row_dict.get('HttpPort'),
+                    'brpc_port': row_dict.get('BrpcPort'),
+                    'version': row_dict.get('Version'),
+                    'last_start_time': row_dict.get('LastStartTime'),
+                    'last_heartbeat': row_dict.get('LastHeartbeat'),
+                    # 存储信息
+                    'total_capacity': total_capacity_bytes,
+                    'used_capacity': used_capacity_bytes,
+                    'available_capacity': available_capacity_bytes,
+                    'used_percent': row_dict.get('UsedPct'),
+                    'max_disk_used_pct': row_dict.get('MaxDiskUsedPct'),
+                    'tablet_num': row_dict.get('TabletNum'),
+                    'discovery_method': 'doris_mysql_protocol'
+                }
+
+                # 3. 尝试获取更详细的系统信息（通过 Backend HTTP 接口）
+                if is_alive and row_dict.get('HttpPort'):
+                    try:
+                        backend_metrics = await self._get_doris_backend_metrics(
+                            row_dict.get('Host'),
+                            row_dict.get('HttpPort')
+                        )
+                        if backend_metrics:
+                            node_info.update(backend_metrics)
+                    except Exception as e:
+                        logger.debug(f"获取 Backend {row_dict.get('Host')} 指标失败: {e}")
+
+                nodes.append(node_info)
+
+            await cursor.close()
+            connection.close()
+
+            logger.info(f"通过 MySQL 协议发现 {len(nodes)} 个 Backend 节点")
+            return nodes
+
         except Exception as e:
-            logger.warning(f"获取Doris Frontend列表失败: {e}")
+            logger.error(f"通过 MySQL 协议获取 Backend 信息失败: {e}")
+            return []
 
-        return nodes
-
-    async def _get_doris_backends(self, session: aiohttp.ClientSession, host: str, port: int, username: str,
-                                  password: str) -> List[Dict]:
-        """获取Doris Backend列表"""
-        nodes = []
+    def _parse_doris_capacity(self, capacity_str: str) -> int:
+        """解析 Doris 容量字符串为字节数"""
         try:
-            auth = aiohttp.BasicAuth(username, password) if username else None
+            if not capacity_str or capacity_str == 'N/A':
+                return 0
 
-            url = f"http://{host}:{port}/api/show_backends"
-            async with session.get(url, auth=auth) as response:
-                response.raise_for_status()
-                data = await response.json()
+            # 移除空格并转为大写
+            capacity_str = capacity_str.replace(' ', '').upper()
 
-                backends = data.get('data', [])
-                for be in backends:
-                    nodes.append({
-                        'hostname': be.get('Host', ''),
-                        'ip_address': be.get('Host', ''),
-                        'role': 'Backend',
-                        'node_type': 'worker',
-                        'status': 'active' if be.get('Alive') == 'true' else 'inactive',
-                        'services': ['Backend'],
-                        'heartbeat_port': be.get('HeartbeatPort'),
-                        'be_port': be.get('BePort'),
-                        'http_port': be.get('HttpPort'),
-                        'brpc_port': be.get('BrpcPort'),
-                        'version': be.get('Version'),
-                        'last_heartbeat': be.get('LastHeartbeat'),
-                        'total_capacity': be.get('TotalCapacity'),
-                        'used_capacity': be.get('UsedCapacity'),
-                        'available_capacity': be.get('AvailCapacity'),
-                        'discovery_method': 'doris_web_api'
-                    })
+            # 提取数字部分
+            import re
+            match = re.match(r'([0-9.]+)([A-Z]*)', capacity_str)
+            if not match:
+                return 0
+
+            value = float(match.group(1))
+            unit = match.group(2) if match.group(2) else 'B'
+
+            # 转换单位
+            unit_multipliers = {
+                'B': 1,
+                'KB': 1024,
+                'MB': 1024 ** 2,
+                'GB': 1024 ** 3,
+                'TB': 1024 ** 4,
+                'PB': 1024 ** 5
+            }
+
+            return int(value * unit_multipliers.get(unit, 1))
+
         except Exception as e:
-            logger.warning(f"获取Doris Backend列表失败: {e}")
+            logger.debug(f"解析容量字符串失败 '{capacity_str}': {e}")
+            return 0
 
-        return nodes
+    async def _get_doris_backend_metrics(self, host: str, http_port: str) -> Dict:
+        """通过 Backend HTTP 接口获取系统指标"""
+        try:
+            # 使用更短的超时时间，避免阻塞主流程
+            timeout = aiohttp.ClientTimeout(total=3, connect=1)
+            async with aiohttp.ClientSession(timeout=timeout) as session:
+                metrics_url = f"http://{host}:{http_port}/metrics"
+
+                async with session.get(metrics_url) as response:
+                    if response.status == 200:
+                        text = await response.text()
+                        return self._parse_doris_metrics(text)
+
+        except Exception as e:
+            logger.debug(f"获取 Doris Backend 指标失败: {e}")
+
+        return {}
+
+    def _parse_doris_metrics(self, metrics_text: str) -> Dict:
+        """解析 Doris 指标文本（Prometheus 格式）"""
+        metrics = {}
+        try:
+            for line in metrics_text.split('\n'):
+                line = line.strip()
+                if line and not line.startswith('#'):
+                    # 解析 Prometheus 格式: metric_name{labels} value
+                    if '{' in line:
+                        # 有标签的情况
+                        parts = line.split(' ')
+                        if len(parts) >= 2:
+                            metric_full = parts[0]
+                            value = parts[1]
+
+                            # 提取指标名称
+                            if '{' in metric_full:
+                                metric_name = metric_full.split('{')[0]
+                                labels = metric_full.split('{')[1].split('}')[0]
+                            else:
+                                metric_name = metric_full
+                                labels = ''
+
+                            # 根据你提供的实际指标提取关键信息
+                            if metric_name == 'jvm_heap_size_bytes':
+                                if 'type="used"' in labels:
+                                    metrics['jvm_heap_used'] = int(float(value))
+                                elif 'type="max"' in labels:
+                                    metrics['jvm_heap_max'] = int(float(value))
+                            elif metric_name == 'system_meminfo':
+                                if 'name="memory_total"' in labels:
+                                    metrics['system_total_memory'] = int(float(value))
+                                elif 'name="memory_free"' in labels:
+                                    metrics['system_free_memory'] = int(float(value))
+                                elif 'name="memory_available"' in labels:
+                                    metrics['system_available_memory'] = int(float(value))
+                    else:
+                        # 简单格式
+                        parts = line.split(' ')
+                        if len(parts) >= 2:
+                            metric_name = parts[0]
+                            value = parts[1]
+                            metrics[metric_name] = float(value)
+
+        except Exception as e:
+            logger.debug(f"解析指标失败: {e}")
+
+        return metrics
+
+    async def _get_doris_frontends_via_mysql(self, host: str, username: str, password: str) -> List[Dict]:
+        """通过 MySQL 协议获取 Frontend 信息"""
+        try:
+            import aiomysql
+
+            connection = await aiomysql.connect(
+                host=host,
+                port=9030,
+                user=username,
+                password=password,
+                connect_timeout=10,
+                autocommit=True
+            )
+
+            cursor = await connection.cursor()
+            await cursor.execute("SHOW FRONTENDS")
+            results = await cursor.fetchall()
+
+            # 获取列名
+            desc = cursor.description
+            columns = [col[0] for col in desc]
+
+            nodes = []
+            for row in results:
+                row_dict = dict(zip(columns, row))
+                is_master = str(row_dict.get('IsMaster', '')).lower() == 'true'
+                is_alive = str(row_dict.get('Alive', '')).lower() == 'true'
+
+                node_info = {
+                    'hostname': row_dict.get('Host', ''),
+                    'ip_address': row_dict.get('Host', ''),
+                    'role': 'Frontend',
+                    'node_type': 'master' if is_master else 'follower',
+                    'status': 'active' if is_alive else 'inactive',
+                    'services': ['Frontend'],
+                    'query_port': row_dict.get('QueryPort'),
+                    'edit_log_port': row_dict.get('EditLogPort'),
+                    'http_port': row_dict.get('HttpPort'),
+                    'rpc_port': row_dict.get('RpcPort'),
+                    'version': row_dict.get('Version'),
+                    'discovery_method': 'doris_mysql_protocol'
+                }
+
+                # 获取 Frontend 的 JVM 指标
+                if is_alive and row_dict.get('HttpPort'):
+                    try:
+                        fe_metrics = await self._get_doris_frontend_metrics(
+                            row_dict.get('Host'),
+                            row_dict.get('HttpPort')
+                        )
+                        if fe_metrics:
+                            node_info.update(fe_metrics)
+                    except Exception as e:
+                        logger.debug(f"获取 Frontend {row_dict.get('Host')} 指标失败: {e}")
+
+                nodes.append(node_info)
+
+                # 记录主节点
+                if is_master:
+                    logger.info(f"发现 Doris Master Frontend: {row_dict.get('Host')}")
+
+            await cursor.close()
+            connection.close()
+
+            logger.info(f"通过 MySQL 协议发现 {len(nodes)} 个 Frontend 节点")
+            return nodes
+
+        except ImportError:
+            logger.error("aiomysql 模块未安装，无法使用 MySQL 协议")
+            return []
+        except Exception as e:
+            logger.error(f"通过 MySQL 协议获取 Frontend 信息失败: {e}")
+            return []
+
+    async def _get_doris_frontend_metrics(self, host: str, http_port: str) -> Dict:
+        """获取 Doris Frontend 指标"""
+        try:
+            async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=5)) as session:
+                metrics_url = f"http://{host}:{http_port}/metrics"
+
+                async with session.get(metrics_url) as response:
+                    if response.status == 200:
+                        text = await response.text()
+                        return self._parse_doris_metrics(text)
+
+        except Exception as e:
+            logger.debug(f"获取 Doris Frontend 指标失败: {e}")
+
+        return {}
 
     async def _discover_all_namenodes(self, session: aiohttp.ClientSession, config: Dict) -> List[Dict]:
         """发现所有NameNode（包括HA）"""
@@ -756,3 +1224,62 @@ class WebApiClusterDiscovery:
             return hostname
         except:
             return ip
+
+    async def _get_hadoop_jvm_metrics(self, session: aiohttp.ClientSession, host: str, port: int,
+                                      config: Dict = None) -> Dict:
+        """获取 Hadoop 节点的 JVM 内存信息"""
+        try:
+            username = config.get('username') if config else None
+            if not username:
+                from config.settings import settings
+                username = settings.HDFS_USER
+
+            # 获取 JVM 内存信息
+            memory_url = f"http://{host}:{port}/jmx?qry=java.lang:type=Memory"
+            if username:
+                memory_url += f"&user.name={username}"
+
+            # 获取操作系统信息
+            os_url = f"http://{host}:{port}/jmx?qry=java.lang:type=OperatingSystem"
+            if username:
+                os_url += f"&user.name={username}"
+
+            memory_info = {}
+
+            # 获取内存信息
+            async with session.get(memory_url) as response:
+                if response.status == 200:
+                    data = await response.json()
+                    beans = data.get('beans', [])
+                    if beans:
+                        bean = beans[0]
+                        heap_memory = bean.get('HeapMemoryUsage', {})
+                        non_heap_memory = bean.get('NonHeapMemoryUsage', {})
+
+                        memory_info.update({
+                            'jvm_heap_used': heap_memory.get('used', 0),
+                            'jvm_heap_max': heap_memory.get('max', 0),
+                            'jvm_heap_committed': heap_memory.get('committed', 0),
+                            'jvm_non_heap_used': non_heap_memory.get('used', 0),
+                            'jvm_non_heap_committed': non_heap_memory.get('committed', 0)
+                        })
+
+            # 获取系统信息
+            async with session.get(os_url) as response:
+                if response.status == 200:
+                    data = await response.json()
+                    beans = data.get('beans', [])
+                    if beans:
+                        bean = beans[0]
+                        memory_info.update({
+                            'system_total_memory': bean.get('TotalPhysicalMemorySize', 0),
+                            'system_free_memory': bean.get('FreePhysicalMemorySize', 0),
+                            'system_cpu_load': bean.get('SystemCpuLoad', 0),
+                            'available_processors': bean.get('AvailableProcessors', 0)
+                        })
+
+            return memory_info
+
+        except Exception as e:
+            logger.debug(f"获取 Hadoop JVM 指标失败: {e}")
+            return {}
