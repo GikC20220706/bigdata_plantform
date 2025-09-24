@@ -1,3 +1,5 @@
+import json
+
 from fastapi import APIRouter, HTTPException, Query, Body, BackgroundTasks, UploadFile, File, Form
 from typing import List, Optional, Dict, Any
 from datetime import datetime
@@ -366,4 +368,274 @@ async def refresh_source_tables(
 
     except Exception as e:
         logger.error(f"刷新表信息失败: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.put("/sources/{source_name}", summary="更新数据源")
+async def update_data_source(
+        source_name: str,
+        request: dict = Body(..., description="更新请求")
+):
+    """
+    更新数据源配置
+
+    请求格式:
+    {
+        "type": "mysql",  # 可选，数据库类型
+        "config": {       # 可选，连接配置
+            "host": "new-host",
+            "port": 3306,
+            "username": "user",
+            "password": "pass",
+            "database": "db"
+        },
+        "description": "更新的描述"  # 可选
+    }
+    """
+    try:
+        logger.info(f"收到更新数据源请求: {source_name} -> {request}")
+
+        db_type = request.get('type')
+        config = request.get('config')
+        description = request.get('description')
+
+        if not any([db_type, config, description]):
+            raise HTTPException(
+                status_code=400,
+                detail="至少需要提供 type、config 或 description 中的一个字段"
+            )
+
+        service = get_optimized_data_integration_service()
+        result = await service.update_data_source(
+            name=source_name,
+            db_type=db_type,
+            config=config,
+            description=description
+        )
+
+        logger.info(f"数据源更新结果: {result}")
+
+        if result.get('success'):
+            return create_response(
+                data=result,
+                message=f"数据源 {source_name} 更新成功"
+            )
+        else:
+            raise HTTPException(
+                status_code=400,
+                detail=result.get('error', '更新数据源失败')
+            )
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"更新数据源失败: {e}")
+        import traceback
+        logger.error(traceback.format_exc())
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/sources/{source_name}/info", summary="获取数据源详细信息")
+async def get_data_source_info(source_name: str):
+    """获取数据源的详细信息，包括配置、状态、统计信息等"""
+    try:
+        service = get_optimized_data_integration_service()
+        result = await service.get_data_source_info(source_name)
+
+        if result.get('success'):
+            return create_response(
+                data=result,
+                message=f"获取数据源 {source_name} 信息成功"
+            )
+        else:
+            raise HTTPException(
+                status_code=404,
+                detail=result.get('error', '数据源不存在')
+            )
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"获取数据源信息失败: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/sources/{source_name}/health", summary="检测数据源健康状态")
+async def detect_data_source_health(source_name: str):
+    """
+    检测指定数据源的健康状态
+    包括连接测试、数据库访问、表结构检查等
+    """
+    try:
+        service = get_optimized_data_integration_service()
+        result = await service.detect_data_source_health(source_name)
+
+        if result.get('success'):
+            return create_response(
+                data=result,
+                message=f"数据源 {source_name} 健康检测完成"
+            )
+        else:
+            raise HTTPException(
+                status_code=404,
+                detail=result.get('error', '数据源不存在')
+            )
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"数据源健康检测失败: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/sources/health", summary="批量检测所有数据源健康状态")
+async def detect_all_data_sources_health():
+    """
+    检测所有数据源的健康状态
+    返回整体健康统计和详细检测结果
+    """
+    try:
+        service = get_optimized_data_integration_service()
+        result = await service.detect_data_source_health()
+
+        return create_response(
+            data=result,
+            message=f"所有数据源健康检测完成"
+        )
+
+    except Exception as e:
+        logger.error(f"批量数据源健康检测失败: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/sources/{source_name}/validate", summary="验证数据源配置")
+async def validate_data_source_config(
+        source_name: str,
+        config: dict = Body(..., description="要验证的配置")
+):
+    """
+    验证数据源配置是否有效
+    不会实际更新数据源，只进行配置验证和连接测试
+    """
+    try:
+        db_type = config.get('type')
+        connection_config = config.get('config', {})
+
+        if not db_type or not connection_config:
+            raise HTTPException(
+                status_code=400,
+                detail="需要提供 type 和 config 字段"
+            )
+
+        # 创建临时客户端进行验证
+        from app.utils.data_integration_clients import DatabaseClientFactory
+
+        try:
+            temp_client = DatabaseClientFactory.create_client(db_type, connection_config)
+            test_result = await temp_client.test_connection()
+
+            return create_response(
+                data={
+                    "valid": test_result.get('success', False),
+                    "test_result": test_result,
+                    "validated_at": datetime.now()
+                },
+                message="配置验证完成"
+            )
+
+        except Exception as client_error:
+            return create_response(
+                data={
+                    "valid": False,
+                    "error": str(client_error),
+                    "validated_at": datetime.now()
+                },
+                message="配置验证失败"
+            )
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"验证数据源配置失败: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/sources/{source_name}/health/history", summary="获取数据源健康检测历史")
+async def get_data_source_health_history(
+        source_name: str,
+        limit: int = Query(50, ge=1, le=200, description="记录数量限制"),
+        days: int = Query(7, ge=1, le=90, description="查询天数")
+):
+    """获取指定数据源的健康检测历史记录"""
+    try:
+        from app.utils.database import get_sync_db_session
+        from sqlalchemy import text
+
+        db = get_sync_db_session()
+
+        try:
+            # 检查表是否存在
+            result = db.execute(text("SHOW TABLES LIKE 'data_source_health_checks'"))
+            if not result.fetchone():
+                return create_response(
+                    data={
+                        "source_name": source_name,
+                        "history": [],
+                        "total_count": 0,
+                        "message": "健康检测历史表不存在"
+                    },
+                    message="健康检测历史查询完成"
+                )
+
+            # 查询健康检测历史
+            history_sql = """
+                SELECT hc.check_timestamp, hc.is_healthy, hc.health_score,
+                       hc.connection_status, hc.connection_time_ms, 
+                       hc.databases_count, hc.tables_count,
+                       hc.connection_error, hc.general_error, hc.checks_performed
+                FROM data_source_health_checks hc
+                INNER JOIN data_sources ds ON hc.data_source_id = ds.id
+                WHERE ds.name = :source_name 
+                  AND hc.check_timestamp >= DATE_SUB(NOW(), INTERVAL :days DAY)
+                ORDER BY hc.check_timestamp DESC
+                LIMIT :limit
+            """
+
+            result = db.execute(text(history_sql), {
+                "source_name": source_name,
+                "days": days,
+                "limit": limit
+            })
+
+            history_records = []
+            for row in result.fetchall():
+                history_records.append({
+                    "check_timestamp": row[0],
+                    "is_healthy": bool(row[1]),
+                    "health_score": row[2],
+                    "connection_status": row[3],
+                    "connection_time_ms": row[4],
+                    "databases_count": row[5],
+                    "tables_count": row[6],
+                    "connection_error": row[7],
+                    "general_error": row[8],
+                    "checks_performed": json.loads(row[9]) if row[9] else []
+                })
+
+            return create_response(
+                data={
+                    "source_name": source_name,
+                    "history": history_records,
+                    "total_count": len(history_records),
+                    "query_days": days,
+                    "limit": limit
+                },
+                message=f"获取 {source_name} 健康检测历史成功"
+            )
+
+        finally:
+            db.close()
+
+    except Exception as e:
+        logger.error(f"获取健康检测历史失败: {e}")
         raise HTTPException(status_code=500, detail=str(e))

@@ -116,3 +116,40 @@ class DataSourceConnection(BaseModel):
 
     def __repr__(self) -> str:
         return f"<DataSourceConnection(data_source_id={self.data_source_id}, success={self.success})>"
+
+class DataSourceHealthCheck(BaseModel):
+    """数据源健康检查记录模型"""
+    __tablename__ = "data_source_health_checks"
+
+    # 基本信息
+    data_source_id = Column(Integer, ForeignKey("data_sources.id"), nullable=False, index=True)
+    check_timestamp = Column(DateTime(timezone=True), nullable=False, index=True)
+    check_type = Column(String(20), nullable=False, default="full",
+                        index=True)  # connection, databases, tables, query, full
+
+    # 健康状态
+    is_healthy = Column(Boolean, nullable=False, index=True)
+    health_score = Column(Integer, nullable=True)  # 0-100分
+
+    # 检测结果详情
+    connection_status = Column(String(20), nullable=True)  # success, failed, timeout
+    connection_time_ms = Column(Integer, nullable=True)
+    databases_accessible = Column(Boolean, nullable=True)
+    databases_count = Column(Integer, nullable=True)
+    tables_accessible = Column(Boolean, nullable=True)
+    tables_count = Column(Integer, nullable=True)
+    query_test = Column(String(20), nullable=True)  # success, failed, not_supported
+    query_time_ms = Column(Integer, nullable=True)
+
+    # 错误信息
+    connection_error = Column(Text, nullable=True)
+    database_error = Column(Text, nullable=True)
+    table_error = Column(Text, nullable=True)
+    query_error = Column(Text, nullable=True)
+    general_error = Column(Text, nullable=True)
+
+    # 检查配置
+    checks_performed = Column(JSON, nullable=True)  # 执行的检查项列表
+
+    # 关系
+    data_source = relationship("DataSource")

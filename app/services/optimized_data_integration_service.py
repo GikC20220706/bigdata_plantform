@@ -1642,23 +1642,551 @@ class OptimizedDataIntegrationService:
             logger.warning(f"统计表数量失败 {source_name}: {e}")
             return 0
 
-    async def _get_table_count_accurate(self, source_name: str, limit: int) -> int:
-        """准确获取表数量 - 但有限制"""
+    async def update_data_source(self, name: str, db_type: str = None, config: Dict[str, Any] = None,
+                                 description: str = None) -> Dict[str, Any]:
+        """
+        更新数据源配置
+
+        Args:
+            name: 数据源名称
+            db_type: 数据库类型（可选）
+            config: 连接配置（可选）
+            description: 描述（可选）
+
+        Returns:
+            Dict: 操作结果
+        """
         try:
-            client = self.connection_manager.get_client(source_name)
-            if not client:
-                return 0
+            logger.info(f"开始更新数据源: {name}")
 
-            # 如果客户端支持 count 方法，优先使用
-            if hasattr(client, 'get_tables_count'):
-                return await client.get_tables_count()
+            # 1. 检查数据源是否存在
+            existing_client = self.connection_manager.get_client(name)
+            if not existing_client:
+                return {
+                    "success": False,
+                    "error": f"数据源 {name} 不存在"
+                }
 
-            # 否则通过查询表列表来统计，但有限制
-            return await self._count_tables_with_limit(source_name, limit)
+            # 2. 获取当前配置
+            current_config = existing_client.config.copy()
+            current_type = existing_client.__class__.__name__.replace('Client', '').lower()
+
+            # 3. 合并更新配置
+            new_type = db_type if db_type else current_type
+            new_config = {**current_config, **(config or {})}
+
+            # 4. 验证新配置
+            if config:
+                # 验证必要字段
+                if new_type in ['mysql', 'postgresql', 'kingbase']:
+                    required_fields = ['host', 'username', 'password']
+                elif new_type == 'excel':
+                    required_fields = ['file_path']
+                else:
+                    required_fields = ['host', 'username']
+
+                missing_fields = [field for field in required_fields if field not in new_config]
+                if missing_fields:
+                    return {
+                        "success": False,
+                        "error": f"缺少必要配置项: {', '.join(missing_fields)}"
+                    }
+
+            # 5. 创建临时客户端进行测试
+            temp_name = f"{name}_temp_update"
+            temp_success = self.connection_manager.add_client(temp_name, new_type, new_config)
+            if not temp_success:
+                return {
+                    "success": False,
+                    "error": f"不支持的数据库类型: {new_type}"
+                }
+
+            # 6. 测试新配置连接
+            temp_client = self.connection_manager.get_client(temp_name)
+            test_result = await temp_client.test_connection()
+
+            # 清理临时客户端
+            self.connection_manager.remove_client(temp_name)
+
+            if not test_result.get('success'):
+                return {
+                    "success": False,
+                    "error": f"连接测试失败: {test_result.get('error', '未知错误')}",
+                    "test_result": test_result
+                }
+
+            # 7. 更新连接管理器中的配置
+            self.connection_manager.remove_client(name)
+            update_success = self.connection_manager.add_client(name, new_type, new_config)
+            if not update_success:
+                # 恢复原配置
+                self.connection_manager.add_client(name, current_type, current_config)
+                return {
+                    "success": False,
+                    "error": "更新连接管理器失败，已恢复原配置"
+                }
+
+            # 8. 更新数据库记录
+            try:
+                await self._update_data_source_in_db(name, new_type, new_config, test_result, description)
+                logger.info(f"数据源 {name} 数据库记录更新成功")
+            except Exception as db_error:
+                logger.error(f"更新数据库记录失败: {db_error}")
+                # 数据库更新失败不影响连接管理器的更新
+
+            logger.info(f"数据源 {name} 更新成功")
+            return {
+                "success": True,
+                "name": name,
+                "type": new_type,
+                "status": "connected",
+                "test_result": test_result,
+                "updated_at": datetime.now(),
+                "message": "数据源更新成功"
+            }
 
         except Exception as e:
-            logger.warning(f"准确获取表数量失败 {source_name}: {e}")
-            return 0
+            logger.error(f"更新数据源异常 {name}: {e}")
+            import traceback
+            logger.error(f"异常堆栈: {traceback.format_exc()}")
+            return {
+                "success": False,
+                "error": f"更新数据源时发生异常: {str(e)}"
+            }
+
+    async def _update_data_source_in_db(self, name: str, db_type: str, config: Dict[str, Any],
+                                        test_result: Dict[str, Any], description: str = None):
+        """更新数据库中的数据源记录"""
+        try:
+            from app.utils.database import get_sync_db_session
+            from sqlalchemy import text
+            import json
+
+            db = get_sync_db_session()
+
+            try:
+                # 检查表是否存在
+                result = db.execute(text("SHOW TABLES LIKE 'data_sources'"))
+                if not result.fetchone():
+                    logger.warning("data_sources表不存在，跳过数据库更新")
+                    return
+
+                # 构建更新SQL
+                update_fields = [
+                    "source_type = :db_type",
+                    "connection_config = :config",
+                    "status = :status",
+                    "last_connection_test = NOW()"
+                ]
+                update_params = {
+                    "db_type": db_type,
+                    "config": json.dumps(config),
+                    "status": "connected" if test_result.get('success') else "disconnected",
+                    "name": name
+                }
+
+                # 如果提供了描述，则更新描述
+                if description is not None:
+                    update_fields.append("description = :description")
+                    update_params["description"] = description
+
+                update_sql = f"""
+                    UPDATE data_sources
+                    SET {', '.join(update_fields)}
+                    WHERE name = :name
+                """
+
+                result = db.execute(text(update_sql), update_params)
+
+                if result.rowcount == 0:
+                    logger.warning(f"数据源 {name} 在数据库中不存在，无法更新")
+                else:
+                    db.commit()
+                    logger.info(f"数据源 {name} 数据库记录更新成功")
+
+            finally:
+                db.close()
+
+        except Exception as e:
+            logger.error(f"更新数据库记录失败: {e}")
+            if 'db' in locals():
+                try:
+                    db.rollback()
+                    db.close()
+                except:
+                    pass
+            raise
+
+    async def get_data_source_info(self, name: str) -> Dict[str, Any]:
+        """
+        获取数据源详细信息
+
+        Args:
+            name: 数据源名称
+
+        Returns:
+            Dict: 数据源信息
+        """
+        try:
+            logger.info(f"获取数据源信息: {name}")
+
+            # 从连接管理器获取客户端
+            client = self.connection_manager.get_client(name)
+            if not client:
+                return {
+                    "success": False,
+                    "error": f"数据源 {name} 不存在"
+                }
+
+            # 获取基本信息
+            source_type = client.__class__.__name__.replace('Client', '').lower()
+            config = client.config.copy()
+
+            # 隐藏敏感信息
+            safe_config = config.copy()
+            if 'password' in safe_config:
+                safe_config['password'] = '***'
+
+            # 测试连接状态
+            test_result = await client.test_connection()
+
+            # 获取数据库中的额外信息
+            db_info = await self._get_data_source_from_db(name)
+
+            source_info = {
+                "success": True,
+                "name": name,
+                "type": source_type,
+                "config": safe_config,
+                "status": "connected" if test_result.get('success') else "disconnected",
+                "test_result": test_result,
+                "created_at": db_info.get('created_at'),
+                "updated_at": db_info.get('updated_at'),
+                "description": db_info.get('description'),
+                "last_connection_test": db_info.get('last_connection_test')
+            }
+
+            # 如果连接成功，获取额外统计信息
+            if test_result.get('success'):
+                try:
+                    # 获取数据库列表
+                    databases = await client.get_databases()
+                    source_info['databases_count'] = len(databases)
+                    source_info['databases'] = databases[:5]  # 只返回前5个
+
+                    # 获取表数量（如果有默认数据库）
+                    if hasattr(client, 'config') and client.config.get('database'):
+                        tables = await client.get_tables()
+                        source_info['tables_count'] = len(tables)
+
+                except Exception as stats_error:
+                    logger.warning(f"获取数据源统计信息失败 {name}: {stats_error}")
+                    source_info['databases_count'] = 0
+                    source_info['tables_count'] = 0
+
+            return source_info
+
+        except Exception as e:
+            logger.error(f"获取数据源信息失败 {name}: {e}")
+            return {
+                "success": False,
+                "error": str(e)
+            }
+
+    async def _get_data_source_from_db(self, name: str) -> Dict[str, Any]:
+        """从数据库获取数据源信息"""
+        try:
+            from app.utils.database import get_sync_db_session
+            from sqlalchemy import text
+
+            db = get_sync_db_session()
+
+            try:
+                result = db.execute(text("""
+                    SELECT created_at, updated_at, description, last_connection_test
+                    FROM data_sources 
+                    WHERE name = :name AND is_active = TRUE
+                """), {"name": name})
+
+                row = result.fetchone()
+                if row:
+                    return {
+                        "created_at": row[0],
+                        "updated_at": row[1],
+                        "description": row[2],
+                        "last_connection_test": row[3]
+                    }
+                else:
+                    return {}
+
+            finally:
+                db.close()
+
+        except Exception as e:
+            logger.warning(f"从数据库获取数据源信息失败 {name}: {e}")
+            return {}
+
+    async def detect_data_source_health(self, name: str = None) -> Dict[str, Any]:
+        """
+        检测数据源健康状态
+
+        Args:
+            name: 数据源名称，None表示检测所有数据源
+
+        Returns:
+            Dict: 健康检测结果
+        """
+        try:
+            start_time = datetime.now()
+            logger.info(f"开始数据源健康检测: {name or 'ALL'}")
+
+            if name:
+                # 检测单个数据源
+                client = self.connection_manager.get_client(name)
+                if not client:
+                    return {
+                        "success": False,
+                        "error": f"数据源 {name} 不存在"
+                    }
+
+                health_result = await self._check_single_source_health(name, client)
+                detection_time = (datetime.now() - start_time).total_seconds()
+
+                return {
+                    "success": True,
+                    "source_name": name,
+                    "health_status": health_result,
+                    "detection_time_seconds": detection_time,
+                    "detected_at": datetime.now()
+                }
+            else:
+                # 检测所有数据源
+                clients = self.connection_manager.list_clients()
+                if not clients:
+                    return {
+                        "success": True,
+                        "total_sources": 0,
+                        "healthy_sources": 0,
+                        "unhealthy_sources": 0,
+                        "detection_results": [],
+                        "detection_time_seconds": 0,
+                        "detected_at": datetime.now()
+                    }
+
+                # 并行检测所有数据源
+                detection_tasks = []
+                for source_name in clients:
+                    client = self.connection_manager.get_client(source_name)
+                    if client:
+                        task = self._check_single_source_health(source_name, client)
+                        detection_tasks.append((source_name, task))
+
+                # 等待所有检测完成
+                detection_results = []
+                healthy_count = 0
+                unhealthy_count = 0
+
+                for source_name, task in detection_tasks:
+                    try:
+                        result = await task
+                        detection_results.append({
+                            "source_name": source_name,
+                            **result
+                        })
+                        if result.get('is_healthy'):
+                            healthy_count += 1
+                        else:
+                            unhealthy_count += 1
+                    except Exception as e:
+                        logger.error(f"检测数据源 {source_name} 失败: {e}")
+                        detection_results.append({
+                            "source_name": source_name,
+                            "is_healthy": False,
+                            "error": str(e)
+                        })
+                        unhealthy_count += 1
+
+                detection_time = (datetime.now() - start_time).total_seconds()
+
+                return {
+                    "success": True,
+                    "total_sources": len(clients),
+                    "healthy_sources": healthy_count,
+                    "unhealthy_sources": unhealthy_count,
+                    "health_rate": (healthy_count / len(clients) * 100) if clients else 0,
+                    "detection_results": detection_results,
+                    "detection_time_seconds": detection_time,
+                    "detected_at": datetime.now()
+                }
+
+        except Exception as e:
+            logger.error(f"数据源健康检测失败: {e}")
+            return {
+                "success": False,
+                "error": str(e)
+            }
+
+    async def _check_single_source_health(self, name: str, client) -> Dict[str, Any]:
+        """检测单个数据源的健康状态"""
+        try:
+            check_start = datetime.now()
+
+            # 1. 连接测试
+            connection_test = await client.test_connection()
+            connection_time = (datetime.now() - check_start).total_seconds() * 1000
+
+            if not connection_test.get('success'):
+                health_info = {
+                    "is_healthy": False,
+                    "connection_status": "failed",
+                    "connection_error": connection_test.get('error'),
+                    "connection_time_ms": connection_time,
+                    "checks_performed": ["connection"],
+                    "health_score": 0
+                }
+                # 记录健康检测结果
+                asyncio.create_task(self._record_health_check(name, health_info))
+                return health_info
+
+            health_info = {
+                "is_healthy": True,
+                "connection_status": "success",
+                "connection_time_ms": connection_time,
+                "database_version": connection_test.get('version'),
+                "checks_performed": ["connection"],
+                "health_score": 100  # 初始分数
+            }
+
+            # 2. 数据库列表检测
+            try:
+                databases = await client.get_databases()
+                health_info["databases_count"] = len(databases)
+                health_info["databases_accessible"] = True
+                health_info["checks_performed"].append("databases")
+            except Exception as db_error:
+                logger.warning(f"数据源 {name} 数据库列表检测失败: {db_error}")
+                health_info["databases_accessible"] = False
+                health_info["database_error"] = str(db_error)
+                health_info["health_score"] -= 20  # 减分
+
+            # 3. 表结构检测（如果有默认数据库）
+            try:
+                if hasattr(client, 'config') and client.config.get('database'):
+                    tables = await client.get_tables()
+                    health_info["tables_count"] = len(tables)
+                    health_info["tables_accessible"] = True
+                    health_info["checks_performed"].append("tables")
+            except Exception as table_error:
+                logger.warning(f"数据源 {name} 表结构检测失败: {table_error}")
+                health_info["tables_accessible"] = False
+                health_info["table_error"] = str(table_error)
+                health_info["health_score"] -= 10  # 减分
+
+            # 4. 简单查询测试（如果支持）
+            try:
+                if hasattr(client, 'execute_query'):
+                    query_start = datetime.now()
+                    await client.execute_query("SELECT 1 as test_query")
+                    query_time = (datetime.now() - query_start).total_seconds() * 1000
+                    health_info["query_test"] = "success"
+                    health_info["query_time_ms"] = query_time
+                    health_info["checks_performed"].append("query")
+            except Exception as query_error:
+                logger.warning(f"数据源 {name} 查询测试失败: {query_error}")
+                health_info["query_test"] = "failed"
+                health_info["query_error"] = str(query_error)
+                health_info["health_score"] -= 10  # 减分
+
+            # 最终健康状态判定
+            health_info["is_healthy"] = health_info["health_score"] >= 70
+
+            # 记录健康检测结果到数据库
+            asyncio.create_task(self._record_health_check(name, health_info))
+
+            return health_info
+
+        except Exception as e:
+            logger.error(f"检测数据源 {name} 健康状态失败: {e}")
+            health_info = {
+                "is_healthy": False,
+                "error": str(e),
+                "health_score": 0
+            }
+            asyncio.create_task(self._record_health_check(name, health_info))
+            return health_info
+
+    async def _record_health_check(self, name: str, health_info: Dict[str, Any]):
+        """记录健康检测结果到数据库"""
+        try:
+            from app.utils.database import get_sync_db_session
+            from sqlalchemy import text
+            import json
+
+            db = get_sync_db_session()
+
+            try:
+                # 1. 更新数据源状态
+                db.execute(text("""
+                    UPDATE data_sources 
+                    SET status = :status, last_connection_test = NOW()
+                    WHERE name = :name
+                """), {
+                    "name": name,
+                    "status": "connected" if health_info.get('is_healthy') else "disconnected"
+                })
+
+                # 2. 检查是否存在 data_source_health_checks 表
+                result = db.execute(text("SHOW TABLES LIKE 'data_source_health_checks'"))
+                if not result.fetchone():
+                    # 如果表不存在，创建表
+
+                    logger.info("创建 data_source_health_checks 表成功")
+
+                # 3. 记录健康检测历史
+                db.execute(text("""
+                    INSERT INTO data_source_health_checks 
+                    (data_source_id, check_timestamp, check_type, is_healthy, health_score, 
+                     connection_status, connection_time_ms, databases_accessible, databases_count,
+                     tables_accessible, tables_count, query_test, query_time_ms,
+                     connection_error, database_error, table_error, query_error, general_error, checks_performed)
+                    SELECT ds.id, NOW(), 'full', :is_healthy, :health_score,
+                           :connection_status, :connection_time_ms, :databases_accessible, :databases_count,
+                           :tables_accessible, :tables_count, :query_test, :query_time_ms,
+                           :connection_error, :database_error, :table_error, :query_error, :general_error, :checks_performed
+                    FROM data_sources ds WHERE ds.name = :name
+                """), {
+                    "name": name,
+                    "is_healthy": health_info.get('is_healthy', False),
+                    "health_score": health_info.get('health_score', 0),
+                    "connection_status": health_info.get('connection_status'),
+                    "connection_time_ms": health_info.get('connection_time_ms'),
+                    "databases_accessible": health_info.get('databases_accessible'),
+                    "databases_count": health_info.get('databases_count'),
+                    "tables_accessible": health_info.get('tables_accessible'),
+                    "tables_count": health_info.get('tables_count'),
+                    "query_test": health_info.get('query_test'),
+                    "query_time_ms": health_info.get('query_time_ms'),
+                    "connection_error": health_info.get('connection_error'),
+                    "database_error": health_info.get('database_error'),
+                    "table_error": health_info.get('table_error'),
+                    "query_error": health_info.get('query_error'),
+                    "general_error": health_info.get('error'),
+                    "checks_performed": json.dumps(health_info.get('checks_performed', []))
+                })
+
+                db.commit()
+
+            finally:
+                db.close()
+
+        except Exception as e:
+            logger.error(f"记录健康检测结果失败: {e}")
+            if 'db' in locals():
+                try:
+                    db.rollback()
+                    db.close()
+                except:
+                    pass
 
 
 _service_instance = None
