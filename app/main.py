@@ -44,7 +44,6 @@ from app.utils.response import create_error_response
 from fastapi.staticfiles import StaticFiles
 from fastapi.openapi.docs import get_swagger_ui_html
 
-
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """
@@ -242,6 +241,26 @@ def create_app() -> FastAPI:
         openapi_url="/openapi.json",
         lifespan=lifespan
     )
+
+    from starlette.middleware.base import BaseHTTPMiddleware
+
+    class RequestSizeLimitMiddleware(BaseHTTPMiddleware):
+        def __init__(self, app, max_upload_size: int = 500 * 1024 * 1024):  # 500MB
+            super().__init__(app)
+            self.max_upload_size = max_upload_size
+
+        async def dispatch(self, request: Request, call_next):
+            if request.method == "POST":
+                content_length = request.headers.get("content-length")
+                if content_length and int(content_length) > self.max_upload_size:
+                    return JSONResponse(
+                        status_code=413,
+                        content={"detail": "请求体过大"}
+                    )
+            return await call_next(request)
+
+    # 注册中间件
+    app.add_middleware(RequestSizeLimitMiddleware, max_upload_size=500 * 1024 * 1024)
 
     # Add middleware
     setup_middleware(app)

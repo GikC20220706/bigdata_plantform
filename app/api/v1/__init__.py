@@ -29,6 +29,7 @@ from .workflow import router as workflow_router
 from .custom_api import router as custom_api_router
 from .api_docs import router as api_docs_router
 from .user_cluster import router as user_cluster_router
+from .resource_files import router as resource_files_router
 
 # Create main API router
 api_router = APIRouter(prefix="/api/v1")
@@ -148,6 +149,10 @@ api_router.include_router(
     prefix="/api-docs",
     tags=["API文档生成"],
     responses={404: {"description": "Not found"}}
+)
+
+api_router.include_router(
+    resource_files_router
 )
 
 __all__ = ["api_router"]
