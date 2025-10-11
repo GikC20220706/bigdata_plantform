@@ -30,6 +30,10 @@ from .custom_api import router as custom_api_router
 from .api_docs import router as api_docs_router
 from .user_cluster import router as user_cluster_router
 from .resource_files import router as resource_files_router
+from .data_catalog import router as data_catalog_router
+from .data_asset import router as data_asset_router
+from .field_standard import router as field_standard_router
+
 
 # Create main API router
 api_router = APIRouter(prefix="/api/v1")
@@ -155,4 +159,20 @@ api_router.include_router(
     resource_files_router
 )
 
+# 🆕 注册数据资源目录路由
+api_router.include_router(
+    data_catalog_router,
+    tags=["数据资源目录"]
+)
+
+# 🆕 注册数据资产路由
+api_router.include_router(
+    data_asset_router,
+    tags=["数据资产"]
+)
+
+api_router.include_router(
+    field_standard_router,
+    tags=["字段标准"]
+)
 __all__ = ["api_router"]

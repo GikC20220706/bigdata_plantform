@@ -28,6 +28,9 @@ from .workflow import (
 )
 from .sync_history import SyncHistory, SyncTableHistory
 from app.models.resource_file import ResourceFile, ResourceType
+from .data_catalog import DataCatalog
+from .data_asset import DataAsset, AssetColumn, AssetAccessLog
+from .field_standard import FieldStandard
 
 # Export all models for easy importing
 __all__ = [
@@ -86,7 +89,13 @@ __all__ = [
     "SyncHistory",        # 添加这一行
     "SyncTableHistory",
     "ResourceFile",
-    "ResourceType"
+    "ResourceType",
+    # 数据资源目录模块
+    "DataCatalog",
+    "DataAsset",
+    "AssetColumn",
+    "AssetAccessLog",
+    "FieldStandard"
 ]
 
 
@@ -104,5 +113,5 @@ def get_all_models():
         DataSourceMetadata, SyncTemplate,
         WorkflowDefinition, WorkflowNodeDefinition, WorkflowEdgeDefinition,
         WorkflowExecution, WorkflowNodeExecution, WorkflowTemplate,
-        WorkflowVariable, WorkflowAlert,CustomAPI, APIParameter, APIAccessLog,UserCluster,SyncHistory, SyncTableHistory,ResourceType,ResourceFile,
+        WorkflowVariable, WorkflowAlert,CustomAPI, APIParameter, APIAccessLog,UserCluster,SyncHistory, SyncTableHistory,ResourceType,ResourceFile,DataCatalog, DataAsset, AssetColumn, AssetAccessLog, FieldStandard,
     ]
