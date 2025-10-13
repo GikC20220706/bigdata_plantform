@@ -534,7 +534,7 @@ async def batch_update_status(
 
 @router.post("/import-from-datasource", summary="从数据源导入表")
 async def import_from_datasource(
-        data_source_id: int = Query(..., description="数据源ID"),
+        data_source_name: str = Query(..., description="数据源名称"),  # ← 改这里
         catalog_id: int = Query(..., description="目标目录ID"),
         database_name: Optional[str] = Query(None, description="数据库名（可选）"),
         table_patterns: Optional[List[str]] = Query(None, description="表名匹配模式，如: cus_%, order_%"),
@@ -546,7 +546,7 @@ async def import_from_datasource(
     """
     从数据源批量导入表作为资产
 
-    - **data_source_id**: 数据源ID
+    - **data_source_name**: 数据源名称（如：cwjg, test-mysql）  # ← 改文档
     - **catalog_id**: 目标目录ID
     - **database_name**: 数据库名（可选，某些数据源需要）
     - **table_patterns**: 表名匹配模式（可选）
@@ -554,39 +554,18 @@ async def import_from_datasource(
       - 不传则导入所有表
     - **include_columns**: 是否导入字段信息（默认true）
 
-    流程：
-    1. 验证数据源和目录
-    2. 连接数据源获取表列表
-    3. 根据table_patterns过滤表
-    4. 批量创建资产
-    5. 如果include_columns=True，获取字段信息
-    6. 更新目录的资产计数
-
-    表名匹配规则：
-    - %: 匹配任意字符
-    - _: 匹配单个字符
-    - 示例: 'cus_%' 匹配所有以cus_开头的表
-
-    注意：
-    - 此操作可能耗时较长（取决于表数量）
-    - 最多导入1000张表
-    - 如果表名重复会跳过
-    - 建议先小范围测试
-
-    返回：
-    - 成功创建的资产数量
-    - 失败的表列表（包含失败原因）
+    # ... 其他文档保持不变
     """
     try:
         logger.info(
-            f"开始批量导入: 数据源={data_source_id}, "
+            f"开始批量导入: 数据源={data_source_name}, "  # ← 改这里
             f"目录={catalog_id}, 数据库={database_name}, "
             f"模式={table_patterns}"
         )
 
         success_assets, failed_items = await data_asset_service.import_tables_from_datasource(
             db,
-            data_source_id=data_source_id,
+            data_source_name=data_source_name,  # ← 改这里：传 name 而不是 id
             catalog_id=catalog_id,
             database_name=database_name,
             table_patterns=table_patterns,

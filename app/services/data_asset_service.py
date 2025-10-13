@@ -1242,167 +1242,272 @@ class DataAssetService:
     async def import_tables_from_datasource(
             self,
             db: AsyncSession,
-            data_source_id: int,
+            data_source_name: str,
             catalog_id: int,
             database_name: Optional[str] = None,
             table_patterns: Optional[List[str]] = None,
             include_columns: bool = True,
             creator: Optional[str] = None
-    ) -> Tuple[List[DataAsset], List[Dict[str, Any]]]:
-        """
-        从数据源批量导入表作为资产
-
-        Args:
-            db: 数据库会话
-            data_source_id: 数据源ID
-            catalog_id: 目标目录ID
-            database_name: 数据库名
-            table_patterns: 表名匹配模式列表，如: ['cus_%', 'order_%']
-            include_columns: 是否导入字段信息
-            creator: 创建人
-
-        Returns:
-            (成功创建的资产列表, 失败的项目列表)
-        """
-        success_assets = []
-        failed_items = []
-
+    ) -> Tuple[List[Any], List[Dict[str, Any]]]:
+        """从数据源批量导入表"""
         try:
-            # 1. 验证数据源
-            data_source = await self._get_data_source(db, data_source_id)
-            if not data_source:
-                raise ValueError(f"数据源 ID {data_source_id} 不存在")
-
-            # 2. 验证目录
+            # 1. 验证目录存在
             catalog = await data_catalog_service.get_catalog_by_id(db, catalog_id)
             if not catalog:
-                raise ValueError(f"目录 ID {catalog_id} 不存在")
+                raise ValueError(f"目录不存在: {catalog_id}")
 
-            # 3. 获取数据源的表列表
+            # 2. 根据名称查找数据源ID（新增）
+            from sqlalchemy import select
+            from app.models.data_source import DataSource
+
+            stmt = select(DataSource).where(DataSource.name == data_source_name)
+            result = await db.execute(stmt)
+            data_source_obj = result.scalar_one_or_none()
+
+            if not data_source_obj:
+                raise ValueError(f"数据源不存在: {data_source_name}")
+
+            data_source_id = data_source_obj.id
+            logger.info(f"找到数据源: {data_source_name} (ID: {data_source_id})")
+
+            # 3. 获取数据源客户端
             from app.services.optimized_data_integration_service import get_optimized_data_integration_service
+
             integration_service = get_optimized_data_integration_service()
+            client = integration_service.connection_manager.get_client(data_source_name)
 
-            logger.info(f"开始从数据源 {data_source.name} 获取表列表")
+            if not client:
+                raise ValueError(f"数据源未连接: {data_source_name}")
 
-            tables_result = await integration_service.get_tables(
-                data_source.name,
+            logger.info(f"成功连接数据源: {data_source_name}")
+
+            # 4. 获取表列表
+            tables = await client.get_tables(
                 database=database_name,
-                limit=1000  # 限制最多1000张表
+                limit=1000
             )
 
-            if not tables_result.get('success'):
-                raise ValueError(f"获取表列表失败: {tables_result.get('error')}")
+            logger.info(f"从数据源获取到 {len(tables)} 张表")
 
-            tables = tables_result.get('tables', [])
-            logger.info(f"获取到 {len(tables)} 张表")
-
-            # 4. 过滤表（根据table_patterns）
-            filtered_tables = []
+            # 5. 根据 table_patterns 过滤表
             if table_patterns:
+                filtered_tables = []
                 for table in tables:
                     table_name = table.get('table_name', '')
-                    # 检查表名是否匹配任一模式
                     for pattern in table_patterns:
-                        # 将SQL LIKE模式转换为Python正则
-                        import re
-                        regex_pattern = pattern.replace('%', '.*').replace('_', '.')
-                        if re.match(f"^{regex_pattern}$", table_name):
+                        if self._match_pattern(table_name, pattern):
                             filtered_tables.append(table)
                             break
-            else:
-                filtered_tables = tables
+                tables = filtered_tables
+                logger.info(f"根据模式过滤后剩余 {len(tables)} 张表")
 
-            logger.info(f"过滤后剩余 {len(filtered_tables)} 张表")
+            # 6. 批量创建资产
+            success_assets = []
+            failed_items = []
 
-            # 5. 批量创建资产
-            for idx, table_info in enumerate(filtered_tables):
+            for table_info in tables[:1000]:
                 try:
-                    table_name = table_info.get('table_name', '')
-
-                    # 生成资产编码（使用表名）
-                    asset_code = f"{data_source.name.upper()}_{table_name.upper()}"
+                    table_name = table_info.get('table_name')
 
                     # 检查是否已存在
-                    existing = await self._get_by_code(db, asset_code)
+                    from app.models.data_asset import DataAsset
+
+                    stmt = select(DataAsset).where(
+                        DataAsset.table_name == table_name,
+                        DataAsset.data_source_id == data_source_id  # 添加数据源ID条件
+                    )
+                    result = await db.execute(stmt)
+                    existing = result.scalar_one_or_none()
+
                     if existing:
+                        logger.warning(f"表 {table_name} 已存在，跳过")
                         failed_items.append({
-                            "index": idx + 1,
                             "table_name": table_name,
-                            "error": f"资产编码 {asset_code} 已存在"
+                            "error": "资产已存在"
                         })
                         continue
 
-                    # 创建资产
-                    asset = DataAsset(
-                        asset_name=table_info.get('comment') or table_name,
+                    # 创建资产（添加 data_source_id）
+                    from app.schemas.data_catalog import DataAssetCreate
+
+                    asset_code = f"{data_source_name}_{table_name}".replace('-', '_')[:100]
+
+                    asset_data = DataAssetCreate(
+                        asset_name=table_name,
                         asset_code=asset_code,
-                        asset_type="table",
                         catalog_id=catalog_id,
                         data_source_id=data_source_id,
-                        database_name=database_name or table_info.get('database'),
+                        database_name=database_name,
                         table_name=table_name,
-                        business_description=table_info.get('comment'),
-                        quality_level="C",
-                        status="normal",
-                        is_public=True,
-                        is_api_published=False,
-                        preview_count=0,
-                        download_count=0,
-                        api_call_count=0,
-                        allow_download=True,
-                        max_download_rows=10000,
-                        created_by=creator,
-                        updated_by=creator
+                        description=table_info.get('comment', '') or f'从数据源 {data_source_name} 导入',
+                        asset_type='table'
                     )
 
-                    db.add(asset)
-                    await db.flush()  # 获取ID
+                    logger.info(f"准备创建资产: {asset_data.model_dump()}")
 
-                    # 6. 如果需要导入字段信息
-                    if include_columns:
-                        try:
-                            await self._fetch_and_save_metadata(db, asset, data_source)
-                        except Exception as e:
-                            logger.warning(f"获取表 {table_name} 元数据失败: {e}")
+                    asset = await self.create_asset(
+                        db,
+                        asset_data,
+                        creator=creator,
+                        auto_fetch_metadata=False
+                    )
+
+                    logger.info(f"成功创建资产: ID={asset.id}, 名称={asset.asset_name}")
 
                     success_assets.append(asset)
 
-                    # 每处理10个提交一次
-                    if len(success_assets) % 10 == 0:
-                        await db.commit()
-                        logger.info(f"已处理 {len(success_assets)} 张表")
+                    # 7. 导入字段信息
+                    if include_columns:
+                        try:
+                            schema = await client.get_table_schema(
+                                table_name=table_name,
+                                database=database_name
+                            )
+
+                            if schema and 'columns' in schema:
+                                await self._save_asset_columns(db, asset.id, schema['columns'])
+                                logger.info(f"成功导入 {table_name} 的字段信息")
+                                await self._update_asset_statistics(
+                                    db,
+                                    asset.id,
+                                    data_source_name,
+                                    table_name,
+                                    database_name,
+                                    integration_service
+                                )
+                        except Exception as e:
+                            logger.warning(f"获取表 {table_name} 字段信息失败: {e}")
+                    try:
+                        # 获取行数
+                        count_sql = f"SELECT COUNT(*) as row_count FROM "
+                        if database_name:
+                            count_sql += f"{database_name}."
+                        count_sql += table_name
+
+                        count_result = await integration_service.execute_query(
+                            data_source_name,
+                            count_sql,
+                            database=database_name,
+                            limit=1
+                        )
+
+                        if count_result.get('success') and count_result.get('data'):
+                            row_count = count_result['data'][0].get('row_count', 0)
+
+                            # 更新资产的行数
+                            from sqlalchemy import update
+                            from app.models.data_asset import DataAsset
+
+                            update_stmt = update(DataAsset).where(
+                                DataAsset.id == asset.id
+                            ).values(
+                                row_count=row_count
+                            )
+                            await db.execute(update_stmt)
+                            await db.flush()
+
+                            logger.info(f"更新表 {table_name} 的行数: {row_count}")
+                    except Exception as e:
+                        logger.warning(f"获取表 {table_name} 统计信息失败: {e}")
 
                 except Exception as e:
-                    logger.error(f"导入表 {table_name} 失败: {e}")
+                    logger.error(f"导入表 {table_name} 失败: {e}", exc_info=True)
                     failed_items.append({
-                        "index": idx + 1,
                         "table_name": table_name,
                         "error": str(e)
                     })
 
-            # 7. 最后提交
+            # 8. 提交事务
             await db.commit()
+            logger.info("事务已提交")
 
-            # 8. 更新目录的资产计数
-            if success_assets:
-                await data_catalog_service.update_asset_count(
-                    db,
-                    catalog_id,
-                    increment=len(success_assets)
+            # 9. 更新目录计数
+            try:
+                from sqlalchemy import func, update
+                from app.models.data_asset import DataAsset
+                from app.models.data_catalog import DataCatalog
+
+                count_stmt = select(func.count(DataAsset.id)).where(
+                    DataAsset.catalog_id == catalog_id
                 )
+                result = await db.execute(count_stmt)
+                asset_count = result.scalar() or 0
 
-            logger.info(
-                f"批量导入完成: 成功 {len(success_assets)}，失败 {len(failed_items)}"
-            )
+                update_stmt = update(DataCatalog).where(
+                    DataCatalog.id == catalog_id
+                ).values(asset_count=asset_count)
+
+                await db.execute(update_stmt)
+                await db.commit()
+
+                logger.info(f"更新目录 {catalog_id} 的资产计数: {asset_count}")
+            except Exception as e:
+                logger.warning(f"更新目录资产计数失败: {e}")
+
+            logger.info(f"批量导入完成: 成功 {len(success_assets)}, 失败 {len(failed_items)}")
 
             return success_assets, failed_items
 
-        except ValueError:
-            raise
         except Exception as e:
             await db.rollback()
-            logger.error(f"批量导入表失败: {e}")
-            raise ValueError(f"批量导入失败: {str(e)}")
+            logger.error(f"批量导入失败: {e}", exc_info=True)
+            raise
+
+    def _match_pattern(self, text: str, pattern: str) -> bool:
+        """
+        SQL LIKE 模式匹配
+        % 匹配任意字符
+        _ 匹配单个字符
+        """
+        import re
+        # 转换 SQL LIKE 模式为正则表达式
+        regex_pattern = pattern.replace('%', '.*').replace('_', '.')
+        regex_pattern = f'^{regex_pattern}$'
+        return bool(re.match(regex_pattern, text, re.IGNORECASE))
+
+    async def _save_asset_columns(self, db: AsyncSession, asset_id: int, columns: List[Dict]) -> None:
+        """保存资产字段信息"""
+        try:
+            from app.models.data_asset import AssetColumn
+            from sqlalchemy import delete, update
+
+            # 删除旧的字段信息
+            await db.execute(delete(AssetColumn).where(AssetColumn.asset_id == asset_id))
+
+            # 插入新的字段信息
+            for idx, col in enumerate(columns, 1):
+                column = AssetColumn(
+                    asset_id=asset_id,
+                    column_name=col.get('column_name', col.get('name', '')),
+                    column_type=col.get('column_type', col.get('type', '')),
+                    column_length=col.get('length'),
+                    column_precision=col.get('precision'),
+                    column_scale=col.get('scale'),
+                    is_primary_key=col.get('is_primary_key', False),
+                    is_nullable=col.get('is_nullable', True),
+                    is_unique=col.get('is_unique', False),
+                    column_comment=col.get('comment', ''),
+                    sort_order=idx
+                )
+                db.add(column)
+
+            await db.flush()
+
+            # ✅ 新增：更新资产的字段数量
+            from app.models.data_asset import DataAsset
+            update_stmt = update(DataAsset).where(
+                DataAsset.id == asset_id
+            ).values(
+                column_count=len(columns)
+            )
+            await db.execute(update_stmt)
+            await db.flush()
+
+            logger.info(f"保存字段信息成功: 资产ID={asset_id}, 字段数={len(columns)}")
+
+        except Exception as e:
+            logger.error(f"保存字段信息失败: {e}")
+            raise
 
     # ==================== 私有方法 ====================
 
@@ -1508,6 +1613,57 @@ class DataAssetService:
         except Exception as e:
             logger.error(f"获取表元数据失败: {e}")
             # 不抛出异常，允许在没有元数据的情况下创建资产
+
+    async def _update_asset_statistics(
+            self,
+            db: AsyncSession,
+            asset_id: int,
+            data_source_name: str,
+            table_name: str,
+            database_name: Optional[str],
+            integration_service
+    ) -> None:
+        """更新资产统计信息（行数、大小）"""
+        try:
+            # 构建 COUNT 查询
+            count_sql = "SELECT COUNT(*) as row_count FROM "
+            if database_name:
+                count_sql += f"`{database_name}`."
+            count_sql += f"`{table_name}`"
+
+            logger.info(f"执行统计查询: {count_sql}")
+
+            # 执行查询
+            result = await integration_service.execute_query(
+                data_source_name,
+                count_sql,
+                database=database_name,
+                limit=1
+            )
+
+            if result.get('success') and result.get('data'):
+                data = result['data']
+                if data and len(data) > 0:
+                    row_count = data[0].get('row_count', 0)
+
+                    # 更新资产
+                    from sqlalchemy import update
+                    from app.models.data_asset import DataAsset
+
+                    update_stmt = update(DataAsset).where(
+                        DataAsset.id == asset_id
+                    ).values(
+                        row_count=row_count
+                    )
+                    await db.execute(update_stmt)
+                    await db.flush()
+
+                    logger.info(f"✅ 更新表 {table_name} 统计信息: 行数={row_count}")
+            else:
+                logger.warning(f"统计查询失败: {result.get('error', '未知错误')}")
+
+        except Exception as e:
+            logger.warning(f"更新表 {table_name} 统计信息失败: {e}")
 
 
 # 创建全局服务实例
