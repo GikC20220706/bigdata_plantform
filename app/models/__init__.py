@@ -31,6 +31,7 @@ from app.models.resource_file import ResourceFile, ResourceType
 from .data_catalog import DataCatalog
 from .data_asset import DataAsset, AssetColumn, AssetAccessLog
 from .field_standard import FieldStandard
+from .indicator_system import IndicatorSystem, IndicatorAssetRelation
 
 # Export all models for easy importing
 __all__ = [
@@ -95,7 +96,10 @@ __all__ = [
     "DataAsset",
     "AssetColumn",
     "AssetAccessLog",
-    "FieldStandard"
+    "FieldStandard",
+    # 指标体系建设模块
+    "IndicatorSystem",
+    "IndicatorAssetRelation"
 ]
 
 
@@ -113,5 +117,5 @@ def get_all_models():
         DataSourceMetadata, SyncTemplate,
         WorkflowDefinition, WorkflowNodeDefinition, WorkflowEdgeDefinition,
         WorkflowExecution, WorkflowNodeExecution, WorkflowTemplate,
-        WorkflowVariable, WorkflowAlert,CustomAPI, APIParameter, APIAccessLog,UserCluster,SyncHistory, SyncTableHistory,ResourceType,ResourceFile,DataCatalog, DataAsset, AssetColumn, AssetAccessLog, FieldStandard,
+        WorkflowVariable, WorkflowAlert,CustomAPI, APIParameter, APIAccessLog,UserCluster,SyncHistory, SyncTableHistory,ResourceType,ResourceFile,DataCatalog, DataAsset, AssetColumn, AssetAccessLog, FieldStandard,IndicatorSystem,IndicatorAssetRelation,
     ]
