@@ -718,14 +718,13 @@ class IndicatorSystemService:
     def export_to_excel(self, indicators: List[IndicatorSystem]) -> BytesIO:
         """
         将指标数据导出为Excel
-
-        Args:
-            indicators: 指标列表
-
-        Returns:
-            Excel文件的BytesIO对象
         """
         try:
+            if indicators:
+                first = indicators[0]
+                logger.info(f"第一条数据类型检查:")
+                logger.info(f"source_system: {type(first.source_system)} = {first.source_system}")
+                logger.info(f"business_domain: {type(first.business_domain)} = {first.business_domain}")
             # 创建工作簿
             wb = openpyxl.Workbook()
             ws = wb.active
@@ -754,28 +753,28 @@ class IndicatorSystemService:
             # 写入数据
             for row_idx, indicator in enumerate(indicators, start=2):
                 data_row = [
-                    indicator.source_system,
-                    indicator.business_domain,
-                    indicator.business_theme,
-                    indicator.indicator_category,
-                    indicator.indicator_name,
-                    indicator.indicator_description,
-                    indicator.remark,
-                    indicator.indicator_type,
-                    indicator.tech_classification,
-                    indicator.data_type,
-                    indicator.data_length,
-                    indicator.data_format,
-                    indicator.responsible_dept,
-                    indicator.collection_frequency,
-                    indicator.collection_time,
-                    indicator.share_type,
-                    indicator.open_attribute
+                    str(indicator.source_system) if indicator.source_system else '',
+                    str(indicator.business_domain) if indicator.business_domain else '',
+                    str(indicator.business_theme) if indicator.business_theme else '',
+                    str(indicator.indicator_category) if indicator.indicator_category else '',
+                    str(indicator.indicator_name) if indicator.indicator_name else '',
+                    str(indicator.indicator_description) if indicator.indicator_description else '',
+                    str(indicator.remark) if indicator.remark else '',
+                    str(indicator.indicator_type) if indicator.indicator_type else '',
+                    str(indicator.tech_classification) if indicator.tech_classification else '',
+                    str(indicator.data_type) if indicator.data_type else '',
+                    str(indicator.data_length) if indicator.data_length is not None else '',
+                    str(indicator.data_format) if indicator.data_format else '',
+                    str(indicator.responsible_dept) if indicator.responsible_dept else '',
+                    str(indicator.collection_frequency) if indicator.collection_frequency else '',
+                    str(indicator.collection_time) if indicator.collection_time else '',
+                    str(indicator.share_type) if indicator.share_type else '',
+                    str(indicator.open_attribute) if indicator.open_attribute else ''
                 ]
 
                 for col_idx, value in enumerate(data_row, start=1):
                     cell = ws.cell(row=row_idx, column=col_idx)
-                    cell.value = value if value is not None else ''
+                    cell.value = value  # value已经是字符串了
                     cell.border = border
 
             # 设置列宽
