@@ -1474,12 +1474,14 @@ class OptimizedDataIntegrationService:
                 # 🔧 添加更多配置信息
                 if hasattr(client, 'config'):
                     config = client.config
+                    password = config.get('password', '')
+                    masked_password = '******' if password else ''
                     source_info.update({
                         "host": config.get('host', ''),
                         "port": config.get('port', 0),
                         "database": config.get('database', ''),
                         "username": config.get('username', ''),
-                        "password": config.get('password', '')
+                        "password": masked_password
                     })
                     # 🔧 调试信息：检查密码是否存在
                     password_status = "存在" if config.get('password') else "缺失"
@@ -1502,12 +1504,14 @@ class OptimizedDataIntegrationService:
                     try:
                         db_config = await self._get_source_config_from_db(name)
                         if db_config:
+                            password = db_config.get('password', '')
+                            masked_password = '******' if password else ''
                             source_info.update({
                                 "host": db_config.get('host', ''),
                                 "port": db_config.get('port', 0),
                                 "database": db_config.get('database', ''),
                                 "username": db_config.get('username', ''),
-                                "password": db_config.get('password', '')
+                                "password": masked_password
                             })
                             logger.info(f"从数据库获取了数据源 {name} 的完整配置")
                     except Exception as e:
@@ -1520,6 +1524,12 @@ class OptimizedDataIntegrationService:
                             "username": "",
                             "password": ""
                         })
+
+                source_id = await self._get_source_id_from_db(name)
+                if source_id:
+                    source_info["id"] = source_id  # 🎯 添加 ID 字段
+                else:
+                    logger.warning(f"数据源 {name} 没有找到对应的ID")
 
                 sources.append(source_info)
 
@@ -1560,6 +1570,33 @@ class OptimizedDataIntegrationService:
         except Exception as e:
             logger.error(f"从数据库获取数据源配置失败 {source_name}: {e}")
             return None
+
+    async def _get_source_id_from_db(self, source_name: str) -> Optional[int]:
+        """从数据库获取数据源的ID"""
+        try:
+            from app.utils.database import get_sync_db_session
+            from sqlalchemy import text
+            db = get_sync_db_session()
+
+            try:
+                result = db.execute(
+                    text("SELECT id FROM data_sources WHERE name = :name AND is_active = 1"),
+                    {"name": source_name}
+                )
+                row = result.fetchone()
+
+                if row:
+                    return row.id  # 或者 return row[0]
+
+                return None
+
+            finally:
+                db.close()
+
+        except Exception as e:
+            logger.error(f"从数据库获取数据源ID失败 {source_name}: {e}")
+            return None
+
     async def get_data_sources_list_with_limited_stats(
             self,
             table_limit: int = 1000,

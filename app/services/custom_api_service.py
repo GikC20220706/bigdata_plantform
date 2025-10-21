@@ -313,9 +313,36 @@ class CustomAPIService:
             # 2. 处理和验证参数
             processed_params = await self._process_request_parameters(api.parameters, request_params)
 
-            # 3. 渲染SQL模板
+            # 3. 根据参数类型格式化值（添加引号等）
+            formatted_params = self._format_params_for_sql(api.parameters, processed_params)
+
+            # 4. 渲染SQL模板
             template = Template(api.sql_template)
-            executed_sql = template.render(**processed_params)
+            executed_sql = template.render(**formatted_params)
+
+            page = request_params.pop('page', None)
+            page_size = request_params.pop('page_size', None)
+
+            if page is not None and page_size is not None:
+                try:
+                    page = int(page)
+                    page_size = int(page_size)
+
+                    # 计算 OFFSET
+                    offset = (page - 1) * page_size if page > 0 else 0
+
+                    # 检查SQL中是否已经有 LIMIT/OFFSET
+                    sql_lower = executed_sql.lower()
+                    has_limit = 'limit' in sql_lower
+
+                    if not has_limit:
+                        # 自动添加 LIMIT 和 OFFSET
+                        executed_sql = f"{executed_sql.rstrip(';')} LIMIT {page_size} OFFSET {offset}"
+                        logger.info(f"自动添加分页: page={page}, page_size={page_size}, offset={offset}")
+                except (ValueError, TypeError) as e:
+                    logger.warning(f"分页参数转换失败: {e}")
+                    page = None
+                    page_size = None
 
             # 4. 执行查询 - 修复连接配置处理
             connection_config = api.data_source.connection_config
@@ -378,13 +405,23 @@ class CustomAPIService:
                 error_message=None
             )
 
-            return APIExecutionResult(
-                success=True,
-                data=result_data,
-                total_count=len(result_data),
-                response_time_ms=response_time_ms,
-                executed_sql=executed_sql
-            )
+            result_dict = {
+                "success": True,
+                "data": result_data,
+                "total_count": len(result_data),
+                "response_time_ms": response_time_ms,
+                "executed_sql": executed_sql
+            }
+
+            if page is not None and page_size is not None:
+                result_dict["pagination"] = {
+                    "page": page,
+                    "page_size": page_size,
+                    "current_count": len(result_data),
+                    "has_more": len(result_data) >= page_size
+                }
+
+            return APIExecutionResult(**result_dict)
 
         except Exception as e:
             response_time_ms = int((time.time() - start_time) * 1000)
@@ -586,6 +623,42 @@ class CustomAPIService:
             return json.loads(connection_config)
         else:
             raise ValueError(f"不支持的连接配置类型: {type(connection_config)}")
+
+    def _format_params_for_sql(
+            self,
+            parameters: List[APIParameter],
+            processed_params: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        """根据参数类型格式化参数值（添加SQL引号等）"""
+        formatted_params = {}
+
+        # 创建参数类型映射
+        param_type_map = {param.param_name: param.param_type for param in parameters}
+
+        for param_name, param_value in processed_params.items():
+            param_type = param_type_map.get(param_name, ParameterType.STRING)
+
+            # 根据类型格式化值
+            if param_type in [ParameterType.STRING, ParameterType.DATE, ParameterType.DATETIME]:
+                # 字符串、日期类型需要加单引号
+                formatted_params[param_name] = f"'{param_value}'"
+            elif param_type in [ParameterType.INTEGER, ParameterType.FLOAT]:
+                # 数字类型不需要引号
+                formatted_params[param_name] = str(param_value)
+            elif param_type == ParameterType.BOOLEAN:
+                # 布尔类型转换为数字
+                formatted_params[param_name] = '1' if str(param_value).lower() in ['true', '1'] else '0'
+            elif param_type == ParameterType.ARRAY:
+                # 数组类型转换为逗号分隔的字符串
+                if isinstance(param_value, list):
+                    formatted_params[param_name] = ','.join([f"'{v}'" for v in param_value])
+                else:
+                    formatted_params[param_name] = f"'{param_value}'"
+            else:
+                # 默认按字符串处理
+                formatted_params[param_name] = f"'{param_value}'"
+
+        return formatted_params
 
 
 # 创建服务实例

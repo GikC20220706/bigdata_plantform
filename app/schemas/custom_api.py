@@ -190,3 +190,5 @@ class APIExecutionResult(BaseModel):
     response_time_ms: int
     executed_sql: Optional[str] = None
     error_message: Optional[str] = None
+    test_note: Optional[str] = None
+    pagination: Optional[Dict[str, Any]] = None
