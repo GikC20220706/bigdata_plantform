@@ -1,5 +1,6 @@
 """
 自定义API生成器服务类
+app/services/custom_api_service.py
 """
 
 import json
@@ -293,13 +294,21 @@ class CustomAPIService:
             api_id: int,
             request_params: Dict[str, Any],
             client_ip: Optional[str] = None,
-            user_agent: Optional[str] = None
+            user_agent: Optional[str] = None,
+            # 添加这几个参数
+            auth_type: Optional[str] = None,
+            api_key_id: Optional[int] = None,
+            user_id: Optional[int] = None
     ) -> APIExecutionResult:
         """执行API查询"""
         start_time = time.time()
         executed_sql = None
         error_message = None
-        status_code = 200
+        status_code = 200,
+        # 传入认证信息
+        auth_type=auth_type,
+        api_key_id=api_key_id,
+        user_id=user_id
 
         try:
             # 1. 获取API配置
@@ -591,7 +600,10 @@ class CustomAPIService:
             response_time_ms: int,
             executed_sql: Optional[str] = None,
             result_count: int = 0,
-            error_message: Optional[str] = None
+            error_message: Optional[str] = None,
+            auth_type: Optional[str] = None,
+            api_key_id: Optional[int] = None,
+            user_id: Optional[int] = None
     ):
         """记录API访问日志"""
         try:
@@ -605,7 +617,10 @@ class CustomAPIService:
                 executed_sql=executed_sql,
                 result_count=result_count,
                 error_message=error_message,
-                error_type=type(Exception).__name__ if error_message else None
+                error_type=type(Exception).__name__ if error_message else None,
+                auth_type = auth_type,
+                api_key_id = api_key_id,
+                user_id = user_id
             )
             db.add(log_entry)
             await db.commit()

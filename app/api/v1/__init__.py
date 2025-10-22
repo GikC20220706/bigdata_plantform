@@ -34,6 +34,7 @@ from .data_catalog import router as data_catalog_router
 from .data_asset import router as data_asset_router
 from .field_standard import router as field_standard_router
 from app.api.v1.indicator_system import router as indicator_system_router
+from app.api.v1 import api_user
 
 
 # Create main API router
@@ -182,4 +183,5 @@ api_router.include_router(
     indicator_system_router,
     tags=["指标体系建设"]
 )
+api_router.include_router(api_user.router)
 __all__ = ["api_router"]

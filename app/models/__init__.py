@@ -32,6 +32,7 @@ from .data_catalog import DataCatalog
 from .data_asset import DataAsset, AssetColumn, AssetAccessLog
 from .field_standard import FieldStandard
 from .indicator_system import IndicatorSystem, IndicatorAssetRelation
+from .api_user import APIUser, APIKey, APIUserPermission, UserType
 
 # Export all models for easy importing
 __all__ = [
@@ -86,6 +87,11 @@ __all__ = [
     "CustomAPI",
     "APIParameter",
     "APIAccessLog",
+    # API User & Security
+    "APIUser",
+    "APIKey",
+    "APIUserPermission",
+    "UserType",
 
     "SyncHistory",        # 添加这一行
     "SyncTableHistory",
@@ -117,5 +123,7 @@ def get_all_models():
         DataSourceMetadata, SyncTemplate,
         WorkflowDefinition, WorkflowNodeDefinition, WorkflowEdgeDefinition,
         WorkflowExecution, WorkflowNodeExecution, WorkflowTemplate,
-        WorkflowVariable, WorkflowAlert,CustomAPI, APIParameter, APIAccessLog,UserCluster,SyncHistory, SyncTableHistory,ResourceType,ResourceFile,DataCatalog, DataAsset, AssetColumn, AssetAccessLog, FieldStandard,IndicatorSystem,IndicatorAssetRelation,
+        WorkflowVariable, WorkflowAlert,CustomAPI, APIParameter, APIAccessLog,APIUser,APIKey,APIUserPermission,UserType,
+        UserCluster,SyncHistory, SyncTableHistory,ResourceType,ResourceFile,DataCatalog, DataAsset,
+        AssetColumn, AssetAccessLog, FieldStandard,IndicatorSystem,IndicatorAssetRelation,
     ]

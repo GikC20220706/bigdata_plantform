@@ -3,7 +3,7 @@
 # =============================================================================
 """
 Main FastAPI application for the Big Data Platform.
-
+app/main.py
 This is the core application module that sets up FastAPI with all necessary
 middleware, routers, and configuration for production deployment.
 """
@@ -43,6 +43,7 @@ from app.api.v1 import api_router
 from app.utils.response import create_error_response
 from fastapi.staticfiles import StaticFiles
 from fastapi.openapi.docs import get_swagger_ui_html
+from app.middleware.api_auth_middleware import APIAuthMiddleware
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -241,6 +242,16 @@ def create_app() -> FastAPI:
         openapi_url="/openapi.json",
         lifespan=lifespan
     )
+
+    # CORS配置
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=["*"],
+        allow_credentials=True,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
+    app.add_middleware(APIAuthMiddleware)
 
     from starlette.middleware.base import BaseHTTPMiddleware
 

@@ -55,6 +55,13 @@ class CustomAPI(BaseModel):
 
     # 状态和配置
     is_active = Column(Boolean, nullable=False, default=True, index=True, comment="是否激活")
+    access_level = Column(
+        String(20),
+        nullable=False,
+        default='authenticated',
+        index=True,
+        comment="访问级别: public=公开, authenticated=需认证, restricted=限定用户"
+    )
     cache_ttl = Column(Integer, nullable=False, default=300, comment="缓存时间(秒)")
     rate_limit = Column(Integer, nullable=False, default=100, comment="频率限制(次/分钟)")
 
@@ -103,6 +110,11 @@ class APIAccessLog(BaseModel):
     # 请求信息
     client_ip = Column(String(45), nullable=True, comment="客户端IP地址")
     user_agent = Column(String(500), nullable=True, comment="用户代理")
+    # 添加认证相关字段
+    auth_type = Column(String(20), nullable=True, comment="认证方式: api_key, public, none")
+    api_key_id = Column(Integer, nullable=True, comment="使用的API Key ID")
+    user_id = Column(Integer, nullable=True, comment="用户ID")
+
     request_params = Column(JSON, nullable=True, comment="请求参数(JSON)")
 
     # 响应信息

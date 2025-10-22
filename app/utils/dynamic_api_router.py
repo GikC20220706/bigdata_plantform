@@ -1,5 +1,6 @@
 """
 动态API路由管理器 - 支持运行时注册和注销API路由
+app/utils/dynamic_api_router.py
 """
 
 import asyncio
@@ -222,12 +223,18 @@ class DynamicAPIRouter:
                     response_data["response_time_ms"] = int((time.time() - start_time) * 1000)
                 else:
                     # 4. 执行查询
+                    auth_type = getattr(request.state, "auth_type", None)
+                    api_key_id = getattr(request.state, "api_key_id", None)
+                    user_id = getattr(request.state, "user_id", None)
                     result = await custom_api_service.execute_api_query(
                         db=db,
                         api_id=api.id,
                         request_params=request_params,
                         client_ip=client_ip,
-                        user_agent=user_agent
+                        user_agent=user_agent,
+                        auth_type=auth_type,
+                        api_key_id=api_key_id,
+                        user_id=user_id
                     )
 
                     if not result.success:
