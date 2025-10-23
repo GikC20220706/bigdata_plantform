@@ -86,5 +86,5 @@ class APIUserPermission(BaseModel):
     granted_by = Column(String(100), nullable=True, comment="授权人")
 
     # 关系映射
-    api = relationship("CustomAPI")
+    api = relationship("CustomAPI", back_populates="user_permissions")
     user = relationship("APIUser", back_populates="permissions")

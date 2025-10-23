@@ -77,6 +77,7 @@ class CustomAPI(BaseModel):
     data_source = relationship("DataSource", back_populates="custom_apis")
     parameters = relationship("APIParameter", back_populates="api", cascade="all, delete-orphan")
     access_logs = relationship("APIAccessLog", back_populates="api", cascade="all, delete-orphan")
+    user_permissions = relationship("APIUserPermission", back_populates="api", cascade="all, delete-orphan")
 
 
 class APIParameter(BaseModel):

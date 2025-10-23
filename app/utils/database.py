@@ -124,7 +124,15 @@ def create_tables_sync():
             # 添加新的同步任务模型
             SyncTask, SyncTableMapping, SyncExecution, SyncTableResult,
             DataSourceMetadata, SyncTemplate,SyncHistory, SyncTableHistory,
-            DataCatalog, DataAsset, AssetColumn, AssetAccessLog, FieldStandard
+            DataCatalog, DataAsset, AssetColumn, AssetAccessLog, FieldStandard,
+            CustomAPI, APIParameter, APIAccessLog,
+            APIUser, APIKey, APIUserPermission,
+            UserCluster,
+            WorkflowDefinition, WorkflowNodeDefinition, WorkflowEdgeDefinition,
+            WorkflowExecution, WorkflowNodeExecution, WorkflowTemplate,
+            WorkflowVariable, WorkflowAlert,
+            ResourceFile,
+            IndicatorSystem, IndicatorAssetRelation
         )
         from sqlalchemy import text
 
