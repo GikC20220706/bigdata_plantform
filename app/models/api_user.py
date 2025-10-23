@@ -5,7 +5,7 @@ app/models/api_user.py
 
 from datetime import datetime
 from typing import Optional
-from sqlalchemy import Column, String, Integer, Text, Boolean, DateTime, ForeignKey, Enum as SQLEnum
+from sqlalchemy import Column, String, Integer, Text, Boolean, DateTime, ForeignKey, Enum as SQLEnum, func
 from sqlalchemy.orm import relationship
 from enum import Enum
 
@@ -22,6 +22,7 @@ class UserType(str, Enum):
 class APIUser(BaseModel):
     """API用户表 - 用于管理API调用者"""
     __tablename__ = "api_users"
+    __table_args__ = {'extend_existing': True}
 
     # 基本信息
     username = Column(String(50), unique=True, nullable=False, index=True, comment="用户名")
@@ -48,13 +49,14 @@ class APIUser(BaseModel):
 class APIKey(BaseModel):
     """API密钥表"""
     __tablename__ = "api_keys"
+    __table_args__ = {'extend_existing': True}
 
     # 关联用户
     user_id = Column(Integer, ForeignKey('api_users.id'), nullable=False, index=True, comment="关联用户ID")
 
     # 密钥信息
     key_name = Column(String(100), nullable=False, comment="密钥名称")
-    api_key = Column(String(64), unique=True, nullable=False, index=True, comment="API密钥")
+    api_key = Column(String(128), unique=True, nullable=False, index=True, comment="API密钥")
     key_prefix = Column(String(20), nullable=False, comment="密钥前缀")
 
     # 状态和配置
@@ -76,13 +78,14 @@ class APIKey(BaseModel):
 class APIUserPermission(BaseModel):
     """API用户权限关联表"""
     __tablename__ = "api_user_permissions"
+    __table_args__ = {'extend_existing': True}
 
     # 关联关系
     api_id = Column(Integer, ForeignKey('custom_apis.id'), nullable=False, index=True, comment="接口ID")
     user_id = Column(Integer, ForeignKey('api_users.id'), nullable=False, index=True, comment="用户ID")
 
     # 授权信息
-    granted_at = Column(DateTime, nullable=False, server_default='CURRENT_TIMESTAMP', comment="授权时间")
+    granted_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now(), comment="授权时间")
     granted_by = Column(String(100), nullable=True, comment="授权人")
 
     # 关系映射

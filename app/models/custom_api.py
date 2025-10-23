@@ -37,6 +37,7 @@ class ParameterType(str, Enum):
 class CustomAPI(BaseModel):
     """自定义API定义表"""
     __tablename__ = "custom_apis"
+    __table_args__ = {'extend_existing': True}
 
     # 基本信息
     api_name = Column(String(100), unique=True, nullable=False, index=True, comment="API名称")
@@ -83,6 +84,7 @@ class CustomAPI(BaseModel):
 class APIParameter(BaseModel):
     """API参数定义表"""
     __tablename__ = "api_parameters"
+    __table_args__ = {'extend_existing': True}
 
     # 关联API
     api_id = Column(Integer, ForeignKey('custom_apis.id'), nullable=False, comment="关联API ID")
@@ -104,6 +106,7 @@ class APIParameter(BaseModel):
 class APIAccessLog(BaseModel):
     """API访问日志表"""
     __tablename__ = "api_access_logs"
+    __table_args__ = {'extend_existing': True}
 
     # 关联API
     api_id = Column(Integer, ForeignKey('custom_apis.id'), nullable=False, comment="关联API ID")
