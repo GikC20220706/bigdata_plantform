@@ -281,7 +281,7 @@ class APIUserService:
             db: AsyncSession,
             request: GrantAPIPermissionRequest
     ) -> List[APIUserPermission]:
-        """授权API访问权限"""
+        """授权API访问权限（替换式）"""
         # 检查API是否存在
         api_query = select(CustomAPI).where(CustomAPI.id == request.api_id)
         api_result = await db.execute(api_query)
@@ -290,23 +290,18 @@ class APIUserService:
         if not api:
             raise ValueError("API不存在")
 
-        # 批量创建权限
+        # ✅ 第一步：删除该API的所有现有权限
+        delete_query = delete(APIUserPermission).where(
+            APIUserPermission.api_id == request.api_id
+        )
+        delete_result = await db.execute(delete_query)
+        deleted_count = delete_result.rowcount
+
+        logger.info(f"删除API {api.api_name} 的 {deleted_count} 条旧权限")
+
+        # ✅ 第二步：创建新的权限
         permissions = []
         for user_id in request.user_ids:
-            # 检查是否已存在
-            existing_query = select(APIUserPermission).where(
-                and_(
-                    APIUserPermission.api_id == request.api_id,
-                    APIUserPermission.user_id == user_id
-                )
-            )
-            existing_result = await db.execute(existing_query)
-            existing = existing_result.scalar_one_or_none()
-
-            if existing:
-                continue  # 跳过已存在的权限
-
-            # 创建新权限
             permission = APIUserPermission(
                 api_id=request.api_id,
                 user_id=user_id,

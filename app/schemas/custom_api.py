@@ -7,6 +7,8 @@ from typing import List, Optional, Dict, Any, Union
 from pydantic import BaseModel, Field, field_validator
 from enum import Enum
 
+from app.schemas.api_user import AccessLevel
+
 
 class HTTPMethod(str, Enum):
     GET = "GET"
@@ -122,6 +124,7 @@ class UpdateAPIRequest(BaseModel):
     description: Optional[str] = Field(None, max_length=1000, description="API描述")
     sql_template: Optional[str] = Field(None, min_length=10, description="SQL查询模板")
     response_format: Optional[ResponseFormat] = Field(None, description="响应格式")
+    access_level: Optional[AccessLevel] = Field(None, description="访问级别")
     cache_ttl: Optional[int] = Field(None, ge=0, le=3600, description="缓存时间")
     rate_limit: Optional[int] = Field(None, ge=1, le=10000, description="频率限制")
     is_active: Optional[bool] = Field(None, description="是否激活")
