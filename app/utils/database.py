@@ -13,6 +13,8 @@ from sqlalchemy.pool import QueuePool
 from config.settings import settings
 from sqlalchemy import create_engine, text
 from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker, AsyncSession
+from contextlib import asynccontextmanager
+
 
 # 根据数据库类型配置连接参数
 def get_engine_config():
@@ -110,6 +112,19 @@ async def get_async_db() -> AsyncSession:
             raise
         finally:
             await session.close()
+
+@asynccontextmanager
+async def get_async_db_context():
+    """异步数据库会话上下文管理器"""
+    session = async_session_maker()
+    try:
+        yield session
+        await session.commit()
+    except Exception as e:
+        await session.rollback()
+        raise e
+    finally:
+        await session.close()
 
 def create_tables_sync():
     """Create all database tables - 完全同步版本"""

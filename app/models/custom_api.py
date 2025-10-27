@@ -109,33 +109,34 @@ class APIAccessLog(BaseModel):
     __table_args__ = {'extend_existing': True}
 
     # 关联API
-    api_id = Column(Integer, ForeignKey('custom_apis.id'), nullable=False, comment="关联API ID")
+    api_id = Column(Integer, ForeignKey('custom_apis.id'), nullable=False, index=True, comment="API ID")
 
     # 请求信息
-    client_ip = Column(String(45), nullable=True, comment="客户端IP地址")
-    user_agent = Column(String(500), nullable=True, comment="用户代理")
-    # 添加认证相关字段
-    auth_type = Column(String(20), nullable=True, comment="认证方式: api_key, public, none")
-    api_key_id = Column(Integer, nullable=True, comment="使用的API Key ID")
-    user_id = Column(Integer, nullable=True, comment="用户ID")
+    client_ip = Column(String(50), nullable=True, index=True, comment="客户端IP")
+    user_agent = Column(String(500), nullable=True, comment="User Agent")
 
-    request_params = Column(JSON, nullable=True, comment="请求参数(JSON)")
+    # 🔧 添加认证信息字段
+    auth_type = Column(String(20), nullable=True, comment="认证类型: public, api_key")
+    api_key_id = Column(Integer, nullable=True, comment="使用的API密钥ID")
+    user_id = Column(Integer, nullable=True, comment="API用户ID")
+
+    request_params = Column(JSON, nullable=True, comment="请求参数")
 
     # 响应信息
     response_time_ms = Column(Integer, nullable=True, comment="响应时间(毫秒)")
-    status_code = Column(Integer, nullable=True, comment="HTTP状态码")
+    status_code = Column(Integer, nullable=True, index=True, comment="HTTP状态码")
     response_size = Column(Integer, nullable=True, comment="响应大小(字节)")
 
     # 错误信息
-    error_message = Column(Text, nullable=True, comment="错误消息")
+    error_message = Column(Text, nullable=True, comment="错误信息")
     error_type = Column(String(100), nullable=True, comment="错误类型")
 
-    # 执行信息
-    executed_sql = Column(LONGTEXT, nullable=True, comment="实际执行的SQL")
-    result_count = Column(Integer, nullable=True, comment="返回记录数")
+    # SQL执行信息
+    executed_sql = Column(Text, nullable=True, comment="执行的SQL")
+    result_count = Column(Integer, nullable=True, comment="结果记录数")
 
-    # 时间信息
-    access_time = Column(DateTime, nullable=False, default=datetime.now, comment="访问时间")
+    # 时间
+    access_time = Column(DateTime, nullable=False, index=True, comment="访问时间")
 
     # 关系映射
     api = relationship("CustomAPI", back_populates="access_logs")

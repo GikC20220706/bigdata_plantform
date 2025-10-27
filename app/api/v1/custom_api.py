@@ -4,7 +4,7 @@
 import json
 from datetime import datetime
 from typing import List, Optional, Dict, Any
-from fastapi import APIRouter, Depends, HTTPException, Query, Request, Body
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Body, Header
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.custom_api import CustomAPI
@@ -311,13 +311,84 @@ async def test_api_execution(
         api_id: int,
         request: Request,
         test_params: Optional[Dict[str, Any]] = Body(None, description="测试参数"),
+        api_key: Optional[str] = Header(None, alias="X-API-Key"),  # API密钥（可选）
         db: AsyncSession = Depends(get_async_db)
 ):
-    """测试API执行，用于开发调试"""
+    """
+    测试API执行，用于开发调试
+
+    支持两种测试模式：
+    1. 管理员测试：不提供API Key，直接测试（用于开发调试）
+    2. 用户测试：提供API Key，按真实权限验证（用于验证权限配置）
+    """
     try:
+        # 获取API详情
+        api = await custom_api_service.get_api_by_id(db, api_id)
+        if not api:
+            raise HTTPException(status_code=404, detail="API不存在")
+
         # 获取客户端信息
         client_ip = request.client.host
         user_agent = request.headers.get("user-agent")
+
+        # 🔧 认证信息（用于记录日志）
+        auth_info = None
+
+        # 🔧 如果提供了API Key，进行权限验证
+        if api_key:
+            from app.services.api_user_service import api_user_service
+
+            logger.info(f"用户测试模式：使用API Key验证权限")
+
+            # 验证API Key
+            valid, error_msg, key_record = await api_user_service.validate_api_key(
+                db=db,
+                api_key=api_key,
+                api_id=api_id,
+                client_ip=client_ip
+            )
+
+            if not valid:
+                logger.warning(f"API Key验证失败: {error_msg}")
+                raise HTTPException(
+                    status_code=401,
+                    detail=error_msg or "API Key无效或已过期"
+                )
+
+            # 🔧 如果API是限定用户模式，检查用户权限
+            if api.access_level == "restricted":
+                from sqlalchemy import select, and_
+                from app.models.api_user import APIUserPermission
+
+                # 查询用户是否有权限
+                query = select(APIUserPermission).where(
+                    and_(
+                        APIUserPermission.api_id == api_id,
+                        APIUserPermission.user_id == key_record.user_id
+                    )
+                )
+                result = await db.execute(query)
+                permission = result.scalar_one_or_none()
+
+                if not permission:
+                    logger.warning(
+                        f"用户无权限访问API: user_id={key_record.user_id}, api_id={api_id}"
+                    )
+                    raise HTTPException(
+                        status_code=403,
+                        detail="您没有权限访问此API"
+                    )
+
+                logger.info(f"权限验证通过: user_id={key_record.user_id}")
+
+            # 设置认证信息
+            auth_info = {
+                "auth_type": "api_key",
+                "api_key_id": key_record.id,
+                "user_id": key_record.user_id
+            }
+        else:
+            logger.info(f"管理员测试模式：跳过权限验证")
 
         # 使用提供的测试参数，如果没有则使用空字典
         params = test_params or {}
@@ -328,8 +399,12 @@ async def test_api_execution(
             api_id=api_id,
             request_params=params,
             client_ip=client_ip,
-            user_agent=user_agent
+            user_agent=user_agent,
+            auth_info=auth_info  # 🔧 传递认证信息用于日志记录
         )
+
+        # 🔧 返回结果，包含测试模式提示
+        test_mode = "用户测试模式（已验证权限）" if api_key else "管理员测试模式（未验证权限）"
 
         return create_response(
             data={
@@ -339,13 +414,17 @@ async def test_api_execution(
                 "response_time_ms": result.response_time_ms,
                 "executed_sql": result.executed_sql,
                 "error_message": result.error_message,
+                "test_mode": test_mode,  # 🔧 显示测试模式
                 "test_note": "测试模式：只显示前10条记录" if result.success and len(result.data) > 10 else None
             },
             message="API测试完成"
         )
 
+    except HTTPException:
+        # 重新抛出HTTP异常（如401、403、404）
+        raise
     except Exception as e:
-        logger.error(f"API测试失败: {e}")
+        logger.error(f"API测试失败: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"测试失败: {str(e)}")
 
 

@@ -12,7 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from loguru import logger
 import time
 
-from app.utils.database import get_async_db
+from app.utils.database import get_async_db, get_async_db_context
 from app.services.api_user_service import api_user_service
 from app.services.custom_api_service import custom_api_service
 
@@ -28,83 +28,64 @@ class APIAuthMiddleware(BaseHTTPMiddleware):
     4. 记录认证信息到访问日志
     """
 
-    async def dispatch(self, request: Request, call_next: Callable) -> Response:
-        """处理请求"""
+    async def dispatch(self, request: Request, call_next):
+        """中间件主逻辑"""
 
-        # 1. 判断是否是自定义API路径
+        # 检查是否是自定义API路径
         if not request.url.path.startswith("/api/custom/"):
-            # 不是自定义API路径，直接放行
             return await call_next(request)
 
-        # 2. 提取API路径（用于查找API配置）
-        api_path = request.url.path
+        logger.info(f"拦截自定义API请求: {request.method} {request.url.path}")
 
-        logger.info(f"拦截自定义API请求: {request.method} {api_path}")
-
-        # 3. 获取数据库会话
-        db: AsyncSession = None
+        # 🔧 改用 async with 方式获取数据库会话
         try:
-            async for session in get_async_db():
-                db = session
-                break
+            async with get_async_db_context() as db:
+                # 根据路径获取API配置
+                api_path = request.url.path
+                api = await self._get_api_by_path(db, api_path)
 
-            # 4. 查找API配置
-            api = await self._get_api_by_path(db, api_path)
+                if not api:
+                    return JSONResponse(
+                        status_code=404,
+                        content={
+                            "code": 404,
+                            "message": f"API not found: {api_path}",
+                            "data": None
+                        }
+                    )
 
-            if not api:
-                logger.warning(f"API路径不存在: {api_path}")
-                return JSONResponse(
-                    status_code=404,
-                    content={
-                        "code": 404,
-                        "message": "API not found",
-                        "data": None
-                    }
-                )
+                # 检查API是否启用
+                if not api.is_active:
+                    return JSONResponse(
+                        status_code=403,
+                        content={
+                            "code": 403,
+                            "message": "API is disabled",
+                            "data": None
+                        }
+                    )
 
-            # 5. 检查API是否启用
-            if not api.is_active:
-                logger.warning(f"API已禁用: {api_path}")
-                return JSONResponse(
-                    status_code=403,
-                    content={
-                        "code": 403,
-                        "message": "API is disabled",
-                        "data": None
-                    }
-                )
+                # 进行认证
+                auth_result = await self._authenticate_request(db, request, api)
 
-            # 6. 根据访问级别进行认证
-            auth_result = await self._authenticate_request(db, request, api)
+                if not auth_result["valid"]:
+                    return JSONResponse(
+                        status_code=401,
+                        content={
+                            "code": 401,
+                            "message": auth_result.get("error", "Authentication failed"),
+                            "data": None
+                        }
+                    )
 
-            if not auth_result["valid"]:
-                logger.warning(f"认证失败: {api_path} - {auth_result['error']}")
-                return JSONResponse(
-                    status_code=401,
-                    content={
-                        "code": 401,
-                        "message": auth_result["error"],
-                        "data": None
-                    }
-                )
+                # 将认证信息存入request.state，供后续使用
+                request.state.auth_info = auth_result
+                request.state.api_id = api.id
 
-            # 7. 认证成功，将认证信息附加到请求上下文
-            request.state.auth_type = auth_result["auth_type"]
-            request.state.api_key_id = auth_result.get("api_key_id")
-            request.state.user_id = auth_result.get("user_id")
-            request.state.api_id = api.id
+                # 调用下一个中间件
+                response = await call_next(request)
 
-            # 8. 继续处理请求
-            response = await call_next(request)
-
-            # 9. 更新密钥使用统计（异步，不阻塞响应）
-            if auth_result.get("api_key_id"):
-                try:
-                    await api_user_service.update_key_usage(db, auth_result["api_key_id"])
-                except Exception as e:
-                    logger.error(f"更新密钥使用统计失败: {e}")
-
-            return response
+                return response
 
         except Exception as e:
             logger.error(f"认证中间件处理异常: {e}", exc_info=True)
@@ -116,10 +97,6 @@ class APIAuthMiddleware(BaseHTTPMiddleware):
                     "data": None
                 }
             )
-        finally:
-            # 关闭数据库会话
-            if db:
-                await db.close()
 
     async def _get_api_by_path(self, db: AsyncSession, api_path: str):
         """根据路径查找API配置"""
@@ -141,18 +118,7 @@ class APIAuthMiddleware(BaseHTTPMiddleware):
             request: Request,
             api
     ) -> dict:
-        """
-        认证请求
-
-        返回格式：
-        {
-            "valid": bool,
-            "auth_type": str,  # "public", "api_key"
-            "api_key_id": int,  # 可选
-            "user_id": int,  # 可选
-            "error": str  # 可选
-        }
-        """
+        """认证请求"""
 
         # 1. 如果是公开API，直接通过
         if api.access_level == "public":
@@ -188,7 +154,18 @@ class APIAuthMiddleware(BaseHTTPMiddleware):
                 "error": error_message or "Invalid API Key"
             }
 
-        # 5. 认证成功
+        # 🔧 5. 如果是限定用户模式，检查用户是否有权限
+        if api.access_level == "restricted":
+            has_permission = await self._check_user_permission(db, api.id, key_record.user_id)
+
+            if not has_permission:
+                logger.warning(f"用户无权限访问: API={api.api_path}, User={key_record.user_id}")
+                return {
+                    "valid": False,
+                    "error": "Access denied. You don't have permission to access this API"
+                }
+
+        # 6. 认证成功
         logger.info(f"认证成功: API={api.api_path}, User={key_record.user_id}, Key={key_record.id}")
 
         return {
@@ -197,6 +174,39 @@ class APIAuthMiddleware(BaseHTTPMiddleware):
             "api_key_id": key_record.id,
             "user_id": key_record.user_id
         }
+
+    async def _check_user_permission(self, db: AsyncSession, api_id: int, user_id: int) -> bool:
+        """
+        检查用户是否有权限访问API
+
+        Args:
+            db: 数据库会话
+            api_id: API ID
+            user_id: 用户ID
+
+        Returns:
+            bool: 是否有权限
+        """
+        try:
+            from sqlalchemy import select, and_
+            from app.models.api_user import APIUserPermission
+
+            # 查询权限表
+            query = select(APIUserPermission).where(
+                and_(
+                    APIUserPermission.api_id == api_id,
+                    APIUserPermission.user_id == user_id
+                )
+            )
+
+            result = await db.execute(query)
+            permission = result.scalar_one_or_none()
+
+            return permission is not None
+
+        except Exception as e:
+            logger.error(f"检查用户权限失败: {e}")
+            return False
 
     def _extract_api_key(self, request: Request) -> Optional[str]:
         """

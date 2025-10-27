@@ -620,7 +620,8 @@ class CustomAPIService:
                 error_type=type(Exception).__name__ if error_message else None,
                 auth_type = auth_type,
                 api_key_id = api_key_id,
-                user_id = user_id
+                user_id = user_id,
+                access_time = datetime.now()
             )
             db.add(log_entry)
             await db.commit()
