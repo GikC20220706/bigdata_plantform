@@ -33,6 +33,12 @@ from .data_asset import DataAsset, AssetColumn, AssetAccessLog
 from .field_standard import FieldStandard
 from .indicator_system import IndicatorSystem, IndicatorAssetRelation
 from .api_user import APIUser, APIKey, APIUserPermission, UserType
+from .job_workflow import JobWorkflow, JobWorkflowStatus
+from .job_work import JobWork, JobWorkType, JobWorkStatus
+from .job_instance import (
+    JobWorkflowInstance, JobWorkInstance,
+    JobInstanceStatus, JobTriggerType
+)
 
 # Export all models for easy importing
 __all__ = [
@@ -105,7 +111,17 @@ __all__ = [
     "FieldStandard",
     # 指标体系建设模块
     "IndicatorSystem",
-    "IndicatorAssetRelation"
+    "IndicatorAssetRelation",
+    # Job Workflow models (新增)
+    "JobWorkflow",
+    "JobWorkflowStatus",
+    "JobWork",
+    "JobWorkType",
+    "JobWorkStatus",
+    "JobWorkflowInstance",
+    "JobWorkInstance",
+    "JobInstanceStatus",
+    "JobTriggerType",
 ]
 
 

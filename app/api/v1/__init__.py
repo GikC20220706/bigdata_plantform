@@ -35,6 +35,9 @@ from .data_asset import router as data_asset_router
 from .field_standard import router as field_standard_router
 from app.api.v1.indicator_system import router as indicator_system_router
 from app.api.v1 import api_user
+from .job_workflow import router as job_workflow_router
+from .job_work import router as job_work_router
+from .job_instance import router as job_instance_router
 
 
 # Create main API router
@@ -182,6 +185,26 @@ api_router.include_router(
 api_router.include_router(
     indicator_system_router,
     tags=["指标体系建设"]
+)
+
+api_router.include_router(
+    job_workflow_router,
+    tags=["数据开发-作业流"],
+    responses={404: {"description": "Not found"}}
+)
+
+# 注册作业路由
+api_router.include_router(
+    job_work_router,
+    tags=["数据开发-作业"],
+    responses={404: {"description": "Not found"}}
+)
+
+# 注册实例查询路由
+api_router.include_router(
+    job_instance_router,
+    tags=["数据开发-作业实例"],
+    responses={404: {"description": "Not found"}}
 )
 api_router.include_router(api_user.router)
 __all__ = ["api_router"]

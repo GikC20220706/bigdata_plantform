@@ -95,6 +95,14 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.warning(f"监控配置验证失败: {e}")
 
+    # 初始化作业流系统
+    try:
+        from app.init_job_workflow import init_job_workflow_system
+        init_job_workflow_system()
+        logger.info("作业流系统初始化完成")
+    except Exception as e:
+        logger.error(f"作业流系统初始化失败: {e}")
+
     # 🆕 初始化监控告警系统
     try:
         # 先导入 executor_service
