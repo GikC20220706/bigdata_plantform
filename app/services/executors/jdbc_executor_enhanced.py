@@ -279,7 +279,7 @@ class JDBCExecutorEnhanced(JobExecutor):
             result = await db.execute(
                 select(DataSource).where(
                     DataSource.id == datasource_id,
-                    DataSource.status == 1  # 只查询启用的数据源
+                    DataSource.is_active == True  # 只查询启用的数据源
                 )
             )
             datasource = result.scalar_one_or_none()
@@ -288,8 +288,30 @@ class JDBCExecutorEnhanced(JobExecutor):
                 logger.error(f"数据源不存在或已禁用: {datasource_id}")
                 return None
 
-            # 转换为配置字典
-            return datasource.to_config_dict()
+            # 从 connection_config 中解析配置
+            connection_config = datasource.connection_config or {}
+
+            # 构建执行器所需的配置格式
+            config = {
+                "type": datasource.source_type,  # mysql, postgresql 等
+                "host": connection_config.get("host"),
+                "port": connection_config.get("port", 3306),
+                "database": connection_config.get("database"),
+                "username": connection_config.get("username"),
+                "password": connection_config.get("password"),
+                "charset": connection_config.get("charset", "utf8mb4"),
+                "poolSize": connection_config.get("poolSize", 5),
+                "maxOverflow": connection_config.get("maxOverflow", 10),
+                "poolTimeout": connection_config.get("poolTimeout", 30),
+                "poolRecycle": connection_config.get("poolRecycle", 3600)
+            }
+
+            # 验证必需字段
+            if not all([config["host"], config["database"], config["username"]]):
+                logger.error(f"数据源配置不完整: {datasource_id}")
+                return None
+
+            return config
 
         except Exception as e:
             logger.error(f"获取数据源配置失败: {e}")
