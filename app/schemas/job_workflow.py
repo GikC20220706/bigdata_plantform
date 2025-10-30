@@ -80,15 +80,10 @@ class JobWorkCreate(BaseModel):
     workType: str = Field(..., description="作业类型")
     remark: Optional[str] = Field(None, description="备注")
 
-    class Config:
-        schema_extra = {
-            "example": {
-                "workflowId": 1,
-                "name": "用户数据查询",
-                "workType": "QUERY_JDBC",
-                "remark": "查询用户基础信息"
-            }
-        }
+    datasourceId: Optional[int] = Field(None, description="数据源ID（JDBC类作业）")
+    clusterId: Optional[int] = Field(None, description="计算集群ID（Spark/Flink类作业）")
+    clusterNodeId: Optional[int] = Field(None, description="集群节点ID")
+    containerId: Optional[int] = Field(None, description="Spark容器ID")
 
 
 class JobWorkUpdate(BaseModel):

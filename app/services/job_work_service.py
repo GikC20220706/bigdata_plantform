@@ -20,8 +20,8 @@ class JobWorkService:
 
     # 作业类型到执行器的映射
     WORK_TYPE_EXECUTOR_MAP = {
-        JobWorkType.EXE_JDBC: 'jdbc_executor',
-        JobWorkType.QUERY_JDBC: 'jdbc_executor',
+        JobWorkType.EXE_JDBC: 'jdbc_executor_enhanced',
+        JobWorkType.QUERY_JDBC: 'jdbc_executor_enhanced',
         JobWorkType.SPARK_SQL: 'spark_sql_executor',
         JobWorkType.DATA_SYNC_JDBC: 'smart_sync_executor',
         JobWorkType.EXCEL_SYNC_JDBC: 'excel_sync_executor',
@@ -59,6 +59,45 @@ class JobWorkService:
             except ValueError:
                 raise ValueError(f"不支持的作业类型: {data.workType}")
 
+            initial_config = {}
+
+            # JDBC类作业：保存数据源ID
+            if work_type_enum in [JobWorkType.EXE_JDBC, JobWorkType.QUERY_JDBC]:
+                if data.datasourceId:
+                    initial_config = {
+                        "dataSourceId": data.datasourceId,
+                        "sql": "",
+                        "timeout": 300,
+                        "type": "execute" if work_type_enum == JobWorkType.EXE_JDBC else "query"
+                    }
+                    logger.info(f"初始化JDBC作业配置: dataSourceId={data.datasourceId}")
+                else:
+                    logger.warning(f"创建JDBC作业但未指定数据源ID")
+
+            # Spark/Flink SQL：保存集群信息
+            elif work_type_enum in [JobWorkType.SPARK_SQL, JobWorkType.FLINK_SQL]:
+                if data.clusterId or data.containerId:
+                    initial_config = {
+                        "clusterId": data.clusterId,
+                        "containerId": data.containerId,
+                        "sql": ""
+                    }
+
+            # Bash/Python：基础配置
+            elif work_type_enum in [JobWorkType.BASH, JobWorkType.PYTHON]:
+                initial_config = {
+                    "script": "",
+                    "timeout": 300
+                }
+
+            # HTTP/API：基础配置
+            elif work_type_enum in [JobWorkType.CURL, JobWorkType.API]:
+                initial_config = {
+                    "url": "",
+                    "method": "GET",
+                    "timeout": 60
+                }
+
             # 创建作业
             work = JobWork(
                 workflow_id=data.workflowId,
@@ -67,14 +106,17 @@ class JobWorkService:
                 remark=data.remark,
                 status=JobWorkStatus.DRAFT,
                 executor=executor,
-                config={}  # 初始化空配置
+                config=initial_config  # ✅ 使用初始化的配置
             )
 
             db.add(work)
             await db.commit()
             await db.refresh(work)
 
-            logger.info(f"创建作业成功: {work.name} (ID: {work.id}, Type: {work.work_type})")
+            logger.info(
+                f"创建作业成功: {work.name} (ID: {work.id}, Type: {work.work_type}, "
+                f"Config: {initial_config})"
+            )
 
             return {
                 "workId": work.id,
@@ -249,19 +291,43 @@ class JobWorkService:
             self,
             db: AsyncSession,
             work_id: int,
-            config: Dict[str, Any]
+            new_config: Dict[str, Any]
     ) -> Optional[JobWork]:
-        """保存作业配置"""
+        """保存作业配置（智能合并）"""
         try:
             work = await self.get_work_by_id(db, work_id)
             if not work:
                 return None
 
-            work.config = config
+            # 获取原配置
+            old_config = work.config or {}
+
+            # 🆕 智能合并配置
+            # 对于SQL类作业，保留dataSourceId等创建时的配置
+            if work.work_type in [JobWorkType.EXE_JDBC, JobWorkType.QUERY_JDBC]:
+                # 保留创建时的dataSourceId
+                if 'dataSourceId' in old_config and 'dataSourceId' not in new_config:
+                    new_config['dataSourceId'] = old_config['dataSourceId']
+
+                # 确保有默认值
+                if 'timeout' not in new_config:
+                    new_config['timeout'] = 300
+                if 'type' not in new_config:
+                    new_config['type'] = 'execute' if work.work_type == JobWorkType.EXE_JDBC else 'query'
+
+            # 对于Spark/Flink SQL，保留集群配置
+            elif work.work_type in [JobWorkType.SPARK_SQL, JobWorkType.FLINK_SQL]:
+                for key in ['clusterId', 'containerId', 'sparkConfig', 'flinkConfig']:
+                    if key in old_config and key not in new_config:
+                        new_config[key] = old_config[key]
+
+            # 更新配置
+            work.config = new_config
+
             await db.commit()
             await db.refresh(work)
 
-            logger.info(f"保存作业配置成功: {work.name}")
+            logger.info(f"保存作业配置成功: {work.name} (ID: {work.id})")
             return work
 
         except Exception as e:

@@ -2,16 +2,18 @@
 单个作业运行控制Service
 支持独立运行单个作业（用于测试）
 """
+import asyncio
 import uuid
 from datetime import datetime
 from typing import Dict, Optional, Any
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from loguru import logger
+from sqlalchemy.orm import selectinload
 
 from app.models.job_work import JobWork
 from app.models.job_instance import (
-    JobWorkInstance, JobInstanceStatus, JobTriggerType
+    JobWorkInstance, JobInstanceStatus, JobTriggerType, JobWorkflowInstance
 )
 from app.services.executors import executor_manager
 
@@ -27,31 +29,41 @@ class JobWorkRunService:
             context: Optional[Dict[str, Any]] = None
     ) -> Dict[str, Any]:
         """
-        运行单个作业（用于测试）
-
-        Args:
-            db: 数据库会话
-            work_id: 作业ID
-            trigger_user: 触发用户
-            context: 执行上下文
-
-        Returns:
-            {
-                "workInstanceId": str,
-                "status": str,
-                "message": str
-            }
+        单独运行作业（用于测试）
         """
         try:
-            # 1. 获取作业配置
+            # 1. 获取作业
             work = await self._get_work(db, work_id)
             if not work:
                 raise ValueError(f"作业不存在: {work_id}")
 
-            # 2. 创建作业实例
+            # 2. 获取所属作业流
+            workflow = work.workflow
+            if not workflow:
+                raise ValueError(f"作业流不存在")
+
+            # 3. 创建临时作业流实例（用于单独测试作业）
+            workflow_instance_id = f"TEST_{uuid.uuid4().hex[:16].upper()}"
+
+            workflow_instance = JobWorkflowInstance(
+                workflow_instance_id=workflow_instance_id,
+                workflow_id=workflow.id,
+                workflow_name=workflow.name,
+                status=JobInstanceStatus.RUNNING,
+                trigger_type=JobTriggerType.MANUAL,
+                last_modified_by=trigger_user,  # ✅ 改为 last_modified_by
+                start_datetime=datetime.now()
+            )
+            db.add(workflow_instance)
+            await db.commit()
+            await db.refresh(workflow_instance)
+
+            # 4. 创建作业实例
+            work_instance_id = f"WORK_{uuid.uuid4().hex[:16].upper()}"
+
             work_instance = JobWorkInstance(
-                instance_id=f"WORK_{uuid.uuid4().hex[:16].upper()}",
-                workflow_instance_id=f"TEST_{uuid.uuid4().hex[:16].upper()}",  # 测试模式
+                instance_id=work_instance_id,
+                workflow_instance_id=workflow_instance_id,
                 work_id=work.id,
                 work_name=work.name,
                 work_type=work.work_type.value,
@@ -62,20 +74,23 @@ class JobWorkRunService:
             await db.commit()
             await db.refresh(work_instance)
 
-            # 3. 异步执行作业
-            import asyncio
+            # 5. 异步执行作业
             asyncio.create_task(
                 self._execute_work_async(
-                    work_instance.instance_id,
+                    work_instance_id,
                     work,
                     context or {}
                 )
             )
 
-            logger.info(f"作业已提交运行: {work.name} (实例ID: {work_instance.instance_id})")
+            logger.info(
+                f"作业已提交运行: {work.name} "
+                f"(实例ID: {work_instance_id})"
+            )
 
             return {
-                "workInstanceId": work_instance.instance_id,
+                "workInstanceId": work_instance_id,
+                "workflowInstanceId": workflow_instance_id,
                 "status": JobInstanceStatus.RUNNING.value,
                 "message": "作业已提交运行"
             }
@@ -202,7 +217,12 @@ class JobWorkRunService:
     ) -> Optional[JobWork]:
         """获取作业"""
         result = await db.execute(
-            select(JobWork).where(JobWork.id == work_id)
+            select(JobWork)
+            .where(JobWork.id == work_id)
+            .options(
+                selectinload(JobWork.workflow),
+                selectinload(JobWork.instances)
+            )
         )
         return result.scalar_one_or_none()
 
@@ -227,22 +247,59 @@ class JobWorkRunService:
     ):
         """异步执行作业（后台任务）"""
         from app.utils.database import async_session_maker
+        from datetime import datetime
 
         try:
             async with async_session_maker() as db:
                 # 获取作业实例
                 work_instance = await self._get_work_instance(db, work_instance_id)
 
+                # ✅ 生成详细的提交日志
+                submit_log_lines = [
+                    f"{datetime.now().strftime('%Y-%m-%d %H:%M:%S.%f')[:-3]} INFO : 开始提交作业",
+                    f"{datetime.now().strftime('%Y-%m-%d %H:%M:%S.%f')[:-3]} INFO : 开始检测运行环境",
+                    f"{datetime.now().strftime('%Y-%m-%d %H:%M:%S.%f')[:-3]} INFO : 检测运行环境完成",
+                    f"{datetime.now().strftime('%Y-%m-%d %H:%M:%S.%f')[:-3]} INFO : 开始执行作业"
+                ]
+
                 # 更新状态为运行中
                 work_instance.status = JobInstanceStatus.RUNNING
                 work_instance.start_datetime = datetime.now()
-                work_instance.submit_log = f"开始执行作业: {work.name}\n执行器: {work.executor}"
+                work_instance.submit_log = "\n".join(submit_log_lines)
                 await db.commit()
 
                 # 获取执行器
                 executor = executor_manager.get_executor(work.executor)
                 if not executor:
                     raise ValueError(f"找不到执行器: {work.executor}")
+
+                # ✅ 添加执行前的日志
+                submit_log_lines.append(
+                    f"{datetime.now().strftime('%Y-%m-%d %H:%M:%S.%f')[:-3]} INFO : 执行参数检查SQL:"
+                )
+
+                # 根据作业类型添加具体信息
+                if work.work_type.value in ['QUERY_JDBC', 'EXE_JDBC']:
+                    sql = work.config.get('sql', '')
+                    # 如果SQL太长，进行格式化
+                    formatted_sql = sql.strip()
+                    submit_log_lines.append(formatted_sql)
+
+                    # 添加数据源信息
+                    datasource_id = work.config.get('dataSourceId')
+                    if datasource_id:
+                        submit_log_lines.append(
+                            f"{datetime.now().strftime('%Y-%m-%d %H:%M:%S.%f')[:-3]} INFO : 使用数据源ID: {datasource_id}"
+                        )
+
+                submit_log_lines.append(
+                    f"{datetime.now().strftime('%Y-%m-%d %H:%M:%S.%f')[:-3]} INFO : 执行查询SQL:"
+                )
+                submit_log_lines.append(work.config.get('sql', '').strip())
+
+                # 更新提交日志
+                work_instance.submit_log = "\n".join(submit_log_lines)
+                await db.commit()
 
                 # 执行作业
                 result = await executor.execute(
@@ -252,14 +309,47 @@ class JobWorkRunService:
                 # 更新执行结果
                 await db.refresh(work_instance)
 
+                # ✅ 更新运行日志
+                running_log_lines = []
+
                 if result.get('success'):
                     work_instance.status = JobInstanceStatus.SUCCESS
                     work_instance.result_data = result.get('data')
-                    work_instance.running_log = (work_instance.running_log or "") + "\n执行成功"
+
+                    # 添加成功日志
+                    submit_log_lines.append(
+                        f"{datetime.now().strftime('%Y-%m-%d %H:%M:%S.%f')[:-3]} INFO : 查询SQL执行成功"
+                    )
+
+                    # 添加结果统计
+                    if result.get('data') and isinstance(result['data'], dict):
+                        row_count = result['data'].get('rowCount', 0)
+                        elapsed = result['data'].get('elapsed', 0)
+                        submit_log_lines.append(
+                            f"{datetime.now().strftime('%Y-%m-%d %H:%M:%S.%f')[:-3]} INFO : 返回行数: {row_count}"
+                        )
+                        submit_log_lines.append(
+                            f"{datetime.now().strftime('%Y-%m-%d %H:%M:%S.%f')[:-3]} INFO : 执行时间: {elapsed}秒"
+                        )
+
+                    submit_log_lines.append(
+                        f"{datetime.now().strftime('%Y-%m-%d %H:%M:%S.%f')[:-3]} INFO : 数据保存成功"
+                    )
+                    submit_log_lines.append(
+                        f"{datetime.now().strftime('%Y-%m-%d %H:%M:%S.%f')[:-3]} INFO : 执行成功"
+                    )
+
+                    work_instance.submit_log = "\n".join(submit_log_lines)
+                    work_instance.running_log = "执行成功"
                 else:
                     work_instance.status = JobInstanceStatus.FAIL
                     work_instance.error_message = result.get('error')
-                    work_instance.running_log = (work_instance.running_log or "") + f"\n执行失败: {result.get('error')}"
+
+                    submit_log_lines.append(
+                        f"{datetime.now().strftime('%Y-%m-%d %H:%M:%S.%f')[:-3]} ERROR : 执行失败: {result.get('error')}"
+                    )
+                    work_instance.submit_log = "\n".join(submit_log_lines)
+                    work_instance.running_log = f"执行失败: {result.get('error')}"
 
                 work_instance.end_datetime = datetime.now()
                 await db.commit()
@@ -277,7 +367,11 @@ class JobWorkRunService:
                     work_instance.status = JobInstanceStatus.FAIL
                     work_instance.end_datetime = datetime.now()
                     work_instance.error_message = str(e)
-                    work_instance.running_log = (work_instance.running_log or "") + f"\n执行异常: {str(e)}"
+
+                    error_log = f"{datetime.now().strftime('%Y-%m-%d %H:%M:%S.%f')[:-3]} ERROR : 执行异常: {str(e)}"
+                    work_instance.submit_log = (work_instance.submit_log or "") + "\n" + error_log
+                    work_instance.running_log = f"执行异常: {str(e)}"
+
                     await db.commit()
             except:
                 pass

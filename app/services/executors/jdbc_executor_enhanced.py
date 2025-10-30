@@ -40,6 +40,7 @@ class ConnectionPoolManager:
 
     async def _create_engine(self, config: Dict[str, Any]) -> AsyncEngine:
         """创建数据库引擎"""
+        from urllib.parse import quote_plus
         db_type = config.get('type', 'mysql')
         host = config.get('host')
         port = config.get('port', 3306)
@@ -47,6 +48,9 @@ class ConnectionPoolManager:
         username = config.get('username')
         password = config.get('password')
         charset = config.get('charset', 'utf8mb4')
+
+        encoded_username = quote_plus(username) if username else ''
+        encoded_password = quote_plus(password) if password else ''
 
         # 连接池配置
         pool_size = config.get('poolSize', 5)
@@ -57,10 +61,10 @@ class ConnectionPoolManager:
         # 构建连接URL
         if db_type == 'mysql':
             driver = 'aiomysql'
-            url = f"mysql+{driver}://{username}:{password}@{host}:{port}/{database}?charset={charset}"
+            url = f"mysql+{driver}://{encoded_username}:{encoded_password}@{host}:{port}/{database}?charset={charset}"
         elif db_type == 'postgresql':
             driver = 'asyncpg'
-            url = f"postgresql+{driver}://{username}:{password}@{host}:{port}/{database}"
+            url = f"postgresql+{driver}://{encoded_username}:{encoded_password}@{host}:{port}/{database}"
         else:
             raise ValueError(f"不支持的数据库类型: {db_type}")
 
@@ -179,13 +183,16 @@ class JDBCExecutorEnhanced(JobExecutor):
             }
 
     async def _execute_query(
-        self,
-        engine: AsyncEngine,
-        sql: str,
-        params: Dict,
-        timeout: int
+            self,
+            engine: AsyncEngine,
+            sql: str,
+            params: Dict,
+            timeout: int
     ) -> Dict[str, Any]:
         """执行查询"""
+        from datetime import date, datetime
+        from decimal import Decimal
+
         try:
             start_time = datetime.now()
 
@@ -196,10 +203,25 @@ class JDBCExecutorEnhanced(JobExecutor):
                 # 获取列名
                 columns = list(result.keys())
 
-                # 获取数据
+                # ✅ 获取数据并转换为JSON可序列化的格式
                 rows = []
                 for row in result:
-                    rows.append(dict(zip(columns, row)))
+                    row_dict = {}
+                    for col, value in zip(columns, row):
+                        # ✅ 处理特殊类型
+                        if isinstance(value, datetime):
+                            row_dict[col] = value.strftime('%Y-%m-%d %H:%M:%S')
+                        elif isinstance(value, date):
+                            row_dict[col] = value.strftime('%Y-%m-%d')
+                        elif isinstance(value, Decimal):
+                            row_dict[col] = float(value)
+                        elif isinstance(value, bytes):
+                            row_dict[col] = value.decode('utf-8', errors='ignore')
+                        elif value is None:
+                            row_dict[col] = None
+                        else:
+                            row_dict[col] = value
+                    rows.append(row_dict)
 
                 elapsed = (datetime.now() - start_time).total_seconds()
 

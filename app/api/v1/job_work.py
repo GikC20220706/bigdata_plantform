@@ -289,22 +289,27 @@ async def offline_work(
 @router.post("/run", summary="运行作业")
 async def run_work(
     data: JobWorkRun,
-    db: AsyncSession = Depends(get_async_db),
-    username: Optional[str] = None
+    db: AsyncSession = Depends(get_async_db)
 ):
-    """手动运行单个作业（用于测试）"""
+    """运行单个作业（用于测试）"""
     try:
         from app.services.job_work_run_service import job_work_run_service
 
         result = await job_work_run_service.run_single_work(
             db=db,
             work_id=data.workId,
-            trigger_user=username,
+            trigger_user=None,  # TODO: 从认证中获取
             context=data.context
         )
 
+        # ✅ 确保返回的是字符串ID，不是对象
         return create_response(
-            data=result,
+            data={
+                "workInstanceId": result["workInstanceId"],  # 字符串
+                "workflowInstanceId": result.get("workflowInstanceId"),
+                "status": result["status"],
+                "message": result.get("message", "作业已提交运行")
+            },
             message="作业已提交运行"
         )
     except ValueError as e:
@@ -366,22 +371,38 @@ async def get_work_instance_status(
 
 @router.get("/instance/{work_instance_id}/log", summary="获取作业实例日志")
 async def get_work_instance_log(
-    work_instance_id: str,
-    log_type: str = Query("all", regex="^(submit|running|all)$", description="日志类型"),
-    db: AsyncSession = Depends(get_async_db)
+        work_instance_id: str,
+        log_type: str = Query("all", regex="^(submit|running|all)$", description="日志类型"),
+        db: AsyncSession = Depends(get_async_db)
 ):
     """获取作业实例的执行日志"""
     try:
         from app.services.job_work_run_service import job_work_run_service
 
+        # 获取完整的实例信息（包括状态）
+        instance_status = await job_work_run_service.get_work_instance_status(
+            db=db,
+            work_instance_id=work_instance_id
+        )
+
+        # 获取日志
         result = await job_work_run_service.get_work_instance_log(
             db=db,
             work_instance_id=work_instance_id,
             log_type=log_type
         )
 
+        # ✅ 转换为前端期望的格式
+        logs = result.get("logs", {})
+
         return create_response(
-            data=result,
+            data={
+                "log": logs.get("submitLog", "") if log_type in ["submit", "all"] else logs.get("runningLog", ""),
+                "status": instance_status.get("status"),
+                "submitLog": logs.get("submitLog", ""),
+                "runningLog": logs.get("runningLog", ""),
+                "resultData": instance_status.get("resultData")
+            },
             message="获取成功"
         )
     except ValueError as e:
