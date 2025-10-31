@@ -124,14 +124,11 @@ async def get_work_detail(
 
 @router.put("/update", summary="更新作业")
 async def update_work(
-    workId: int = Body(..., embed=True),
-    name: Optional[str] = Body(None),
-    remark: Optional[str] = Body(None),
+    data: JobWorkUpdate,
     db: AsyncSession = Depends(get_async_db)
 ):
     """更新作业基本信息"""
     try:
-        data = JobWorkUpdate(workId=workId, name=name, remark=remark)
         work = await job_work_service.update_work(db, data)
 
         if not work:

@@ -55,7 +55,30 @@ class JobWorkService:
             # 确定执行器
             try:
                 work_type_enum = JobWorkType(data.workType)
-                executor = self.WORK_TYPE_EXECUTOR_MAP.get(work_type_enum)
+
+                # 对于JDBC类作业,需要根据数据源类型选择执行器
+                if work_type_enum in [JobWorkType.EXE_JDBC, JobWorkType.QUERY_JDBC]:
+                    # 如果指定了数据源,检查数据源类型
+                    if data.datasourceId:
+                        # 查询数据源类型
+                        from app.models.data_source import DataSource
+                        ds_result = await db.execute(
+                            select(DataSource).where(DataSource.id == data.datasourceId)
+                        )
+                        datasource = ds_result.scalar_one_or_none()
+
+                        if datasource and datasource.source_type.lower() == 'hive':
+                            executor = 'hive_executor'
+                        elif datasource and datasource.source_type.lower() == 'kingbase':
+                            # KingBase使用专门的KingBaseExecutor(ksycopg2驱动)
+                            executor = 'kingbase_executor'
+                        else:
+                            executor = 'jdbc_executor_enhanced'
+                    else:
+                        executor = 'jdbc_executor_enhanced'
+                else:
+                    executor = self.WORK_TYPE_EXECUTOR_MAP.get(work_type_enum)
+
             except ValueError:
                 raise ValueError(f"不支持的作业类型: {data.workType}")
 

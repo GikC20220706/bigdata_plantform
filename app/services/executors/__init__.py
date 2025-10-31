@@ -4,6 +4,8 @@
 """
 from .base_executor import JobExecutor, ExecutorManager, executor_manager
 from .bash_executor import BashExecutor
+from .hive_executor import HiveExecutor
+from .kingbase_executor import KingBaseExecutor
 from .smart_sync_executor import SmartSyncExecutor
 from .python_executor import PythonExecutor
 from .http_executor import HttpExecutor
@@ -38,6 +40,14 @@ def init_executors():
     sync_executor = SmartSyncExecutor()
     executor_manager.register_executor('smart_sync_executor', sync_executor)
 
+    # 注册Hive执行器
+    hive_executor = HiveExecutor()
+    executor_manager.register_executor('hive_executor', hive_executor)
+
+    # 注册KingBase执行器
+    kingbase_executor = KingBaseExecutor()
+    executor_manager.register_executor('kingbase_executor', kingbase_executor)
+
     # TODO: 注册其他执行器
     # - spark_sql_executor: Spark SQL执行器
     # - spark_jar_executor: Spark Jar执行器
@@ -61,5 +71,7 @@ __all__ = [
     "PythonExecutor",
     "HttpExecutor",
     "ApiExecutor",
-    "SmartSyncExecutor"
+    "SmartSyncExecutor",
+    "HiveExecutor",
+    "KingBaseExecutor"
 ]
