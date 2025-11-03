@@ -80,7 +80,8 @@ class OptimizedDataIntegrationService:
             logger.info("将继续启动，但需要手动配置数据源连接")
 
     @cache_table_schema(ttl=1800)  # 30分钟缓存
-    async def get_table_schema(self, source_name: str, table_name: str, database: str = None, schema: str = None) -> Dict[str, Any]:
+    async def get_table_schema(self, source_name: str, table_name: str, database: str = None, schema: str = None) -> \
+    Dict[str, Any]:
         """获取表结构 - 长期缓存"""
         try:
             client = self.connection_manager.get_client(source_name)
@@ -90,13 +91,17 @@ class OptimizedDataIntegrationService:
                     "error": f"数据源 {source_name} 不存在"
                 }
 
-            schema = await client.get_table_schema(table_name, database,schema)
+            # 修改这里:只传2个参数
+            table_schema = await client.get_table_schema(table_name, database)
+
             return {
                 "success": True,
                 "source_name": source_name,
                 "database": database,
                 "table_name": table_name,
-                "schema": schema,
+                "columns": table_schema.get('columns', []),
+                "fields": table_schema.get('columns', []),  # 兼容字段
+                "schema": table_schema,
                 "retrieved_at": datetime.now(),
                 "cached": True
             }

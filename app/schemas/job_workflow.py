@@ -85,6 +85,10 @@ class JobWorkCreate(BaseModel):
     clusterNodeId: Optional[int] = Field(None, description="集群节点ID")
     containerId: Optional[int] = Field(None, description="Spark容器ID")
 
+    class Config:
+        # 添加这个配置，允许通过属性名访问字段
+        populate_by_name = True  # Pydantic v2
+
 
 class JobWorkUpdate(BaseModel):
     """更新作业请求"""
