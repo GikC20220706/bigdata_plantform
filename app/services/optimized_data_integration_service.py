@@ -83,33 +83,52 @@ class OptimizedDataIntegrationService:
     async def get_table_schema(self, source_name: str, table_name: str, database: str = None, schema: str = None) -> \
     Dict[str, Any]:
         """获取表结构 - 长期缓存"""
+        import traceback
         try:
+            logger.info(f"开始获取表结构: source={source_name}, table={table_name}, db={database}, schema={schema}")
+
             client = self.connection_manager.get_client(source_name)
             if not client:
+                logger.error(f"数据源不存在: {source_name}")
                 return {
                     "success": False,
                     "error": f"数据源 {source_name} 不存在"
                 }
 
-            # 修改这里:只传2个参数
-            table_schema = await client.get_table_schema(table_name, database)
+            logger.info(f"客户端类型: {client.__class__.__name__}")
+
+            # 根据客户端类型判断是否需要传schema参数
+            client_class_name = client.__class__.__name__
+
+            if client_class_name == 'KingbaseClient':
+                logger.info(f"使用Kingbase客户端,传递3个参数")
+                table_schema = await client.get_table_schema(table_name, database, schema)
+            else:
+                logger.info(f"使用{client_class_name}客户端,传递2个参数")
+                table_schema = await client.get_table_schema(table_name, database)
+
+            logger.info(f"成功获取表结构,列数: {len(table_schema.get('columns', []))}")
 
             return {
                 "success": True,
                 "source_name": source_name,
                 "database": database,
+                "schema": schema,
                 "table_name": table_name,
                 "columns": table_schema.get('columns', []),
-                "fields": table_schema.get('columns', []),  # 兼容字段
+                "fields": table_schema.get('columns', []),
                 "schema": table_schema,
                 "retrieved_at": datetime.now(),
                 "cached": True
             }
         except Exception as e:
+            error_trace = traceback.format_exc()
             logger.error(f"获取表结构失败 {source_name}.{database}.{table_name}: {e}")
+            logger.error(f"完整错误堆栈:\n{error_trace}")
             return {
                 "success": False,
-                "error": str(e)
+                "error": str(e),
+                "error_trace": error_trace
             }
 
     @cache_data_preview(ttl=300)  # 5分钟缓存

@@ -323,7 +323,7 @@ async def test_api_execution(
     """
     try:
         # 获取API详情
-        api = await custom_api_service.get_api_by_id(db, api_id)
+        api = await custom_api_service.get_api(db, api_id)
         if not api:
             raise HTTPException(status_code=404, detail="API不存在")
 

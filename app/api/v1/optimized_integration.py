@@ -179,17 +179,34 @@ async def get_tables(
     except Exception as e:
         logger.error(f"获取表列表失败: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+
 @router.get("/sources/{source_name}/tables/{table_name}/schema", summary="获取表结构")
-async def get_table_schema(source_name: str, table_name: str, database: Optional[str] = Query(None, description="数据库名称"),schema: Optional[str] = Query(None, description="Schema名称")):
+async def get_table_schema(source_name: str, table_name: str,
+                           database: Optional[str] = Query(None, description="数据库名称"),
+                           schema: Optional[str] = Query(None, description="Schema名称")):
     try:
+        logger.info(f"API层接收到请求: source={source_name}, table={table_name}, db={database}, schema={schema}")
         service = get_optimized_data_integration_service()
-        result = await service.get_table_schema(source_name, table_name, database,schema)
+        result = await service.get_table_schema(source_name, table_name, database, schema)
+
+        logger.info(f"Service返回结果: success={result.get('success')}, error={result.get('error')}")
+
         if result.get('success'):
             return create_response(data=result, message=f"获取表 {table_name} 结构成功")
         else:
-            raise HTTPException(status_code=404, detail=result.get('error', '获取表结构失败'))
+            error_msg = result.get('error', '获取表结构失败')
+            logger.error(f"Service层返回失败: {error_msg}")
+            if result.get('error_trace'):
+                logger.error(f"Service层错误堆栈:\n{result.get('error_trace')}")
+            raise HTTPException(status_code=404, detail=error_msg)
+    except HTTPException:
+        raise
     except Exception as e:
-        logger.error(f"获取表结构失败: {e}")
+        import traceback
+        error_detail = traceback.format_exc()
+        logger.error(f"API层异常: {e}")
+        logger.error(f"API层错误堆栈:\n{error_detail}")
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.get("/sources/{source_name}/tables/{table_name}/metadata", summary="获取表元数据")
