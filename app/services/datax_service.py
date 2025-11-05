@@ -152,7 +152,7 @@ class DataXIntegrationService:
                 "name": "mysqlreader",
                 "parameter": {
                     "username": source['username'],
-                    "password": "1qaz@WSX3edc",
+                    "password": source['password'],
                     "connection": [{
                         "jdbcUrl": [f"jdbc:mysql://{source['host']}:{source['port']}/{source['database']}?&useSSL=false&ServerTimeZone=UTC&characterEncoding=UTF-8"],
                         "querySql": [select_sql]
