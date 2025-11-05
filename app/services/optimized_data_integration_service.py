@@ -79,11 +79,12 @@ class OptimizedDataIntegrationService:
             logger.error(f"❌ 从数据库加载连接配置失败: {e}")
             logger.info("将继续启动，但需要手动配置数据源连接")
 
-    @cache_table_schema(ttl=1800)  # 30分钟缓存
+    @cache_table_schema(ttl=1800)
     async def get_table_schema(self, source_name: str, table_name: str, database: str = None, schema: str = None) -> \
     Dict[str, Any]:
         """获取表结构 - 长期缓存"""
         import traceback
+
         try:
             logger.info(f"开始获取表结构: source={source_name}, table={table_name}, db={database}, schema={schema}")
 
@@ -97,15 +98,38 @@ class OptimizedDataIntegrationService:
 
             logger.info(f"客户端类型: {client.__class__.__name__}")
 
-            # 根据客户端类型判断是否需要传schema参数
-            client_class_name = client.__class__.__name__
+            # 尝试不同的参数组合
+            table_schema = None
 
-            if client_class_name == 'KingbaseClient':
-                logger.info(f"使用Kingbase客户端,传递3个参数")
-                table_schema = await client.get_table_schema(table_name, database, schema)
-            else:
-                logger.info(f"使用{client_class_name}客户端,传递2个参数")
-                table_schema = await client.get_table_schema(table_name, database)
+            # 尝试1: 只传 table_name
+            try:
+                logger.info("尝试调用: get_table_schema(table_name)")
+                table_schema = await client.get_table_schema(table_name)
+                logger.info("调用成功(1个参数)")
+            except TypeError as te:
+                # 参数不匹配,尝试下一种
+                logger.debug(f"1个参数调用失败: {te}")
+
+                # 尝试2: 传 table_name, database
+                try:
+                    logger.info("尝试调用: get_table_schema(table_name, database)")
+                    table_schema = await client.get_table_schema(table_name, database)
+                    logger.info("调用成功(2个参数)")
+                except TypeError as te2:
+                    # 参数不匹配,尝试下一种
+                    logger.debug(f"2个参数调用失败: {te2}")
+
+                    # 尝试3: 传 table_name, database, schema
+                    try:
+                        logger.info("尝试调用: get_table_schema(table_name, database, schema)")
+                        table_schema = await client.get_table_schema(table_name, database, schema)
+                        logger.info("调用成功(3个参数)")
+                    except Exception as te3:
+                        logger.error(f"3个参数调用失败: {te3}")
+                        raise
+
+            if not table_schema:
+                raise ValueError("无法获取表结构")
 
             logger.info(f"成功获取表结构,列数: {len(table_schema.get('columns', []))}")
 

@@ -152,9 +152,9 @@ class DataXIntegrationService:
                 "name": "mysqlreader",
                 "parameter": {
                     "username": source['username'],
-                    "password": source['password'],
+                    "password": "1qaz@WSX3edc",
                     "connection": [{
-                        "jdbcUrl": [f"jdbc:mysql://{source['host']}:{source['port']}/{source['database']}"],
+                        "jdbcUrl": [f"jdbc:mysql://{source['host']}:{source['port']}/{source['database']}?&useSSL=false&ServerTimeZone=UTC&characterEncoding=UTF-8"],
                         "querySql": [select_sql]
                     }]
                 }
@@ -174,7 +174,7 @@ class DataXIntegrationService:
                     "splitPk": source.get('split_pk', ''),
                     "connection": [{
                         "table": [source['table']],
-                        "jdbcUrl": [f"jdbc:mysql://{source['host']}:{source['port']}/{source['database']}"]
+                        "jdbcUrl": [f"jdbc:mysql://{source['host']}:{source['port']}/{source['database']}?&useSSL=false&ServerTimeZone=UTC&characterEncoding=UTF-8"]
                     }]
                 }
             }
@@ -476,13 +476,24 @@ class DataXIntegrationService:
                 raise ValueError("Hive Writer缺少字段配置")
             file_type = target.get('file_type', 'orc').lower()
 
+            # 获取写入模式,默认追加
+            write_mode = target.get('write_mode', 'append')
+
+            # DataX HDFS Writer 的 writeMode 支持: append, nonConflict, truncate
+            # 映射我们的模式到 DataX 的模式
+            datax_write_mode_map = {
+                'append': 'append',  # 追加
+                'overwrite': 'truncate',  # 覆写(DataX中用truncate表示清空后写入)
+            }
+            datax_write_mode = datax_write_mode_map.get(write_mode, 'append')
+
             writer_params = {
                 "defaultFS": f"hdfs://{target['namenode_host']}:{target['namenode_port']}",
                 "fileType": file_type,
                 "path": target['hdfs_path'],
                 "fileName": target.get('file_name', 'data'),
                 "column": [{"name": col, "type": "string"} for col in columns],
-                "writeMode": "append",
+                "writeMode": datax_write_mode,
                 "encoding": "UTF-8"
             }
 
