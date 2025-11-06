@@ -94,7 +94,9 @@ class SmartSyncExecutor(JobExecutor):
                     'target_exists': False,
                     'strategy': 'full_copy',
                     'schema_mapping': schema_mapping,
-                    'write_mode': write_mode
+                    'write_mode': write_mode,
+                    'partition_column': work_config.get('partitionColumn'),
+                    'partition_type': work_config.get('partitionType', 'date')
                 }]
             }
 

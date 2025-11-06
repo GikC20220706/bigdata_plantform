@@ -668,12 +668,33 @@ class SmartSyncService:
         creation_results = []
         target_name = sync_plan['target_name']
 
+        # 获取目标配置，判断是否为Hive
+        target_config = await self._get_data_source_config(target_name)
+        is_hive_target = target_config and target_config.get('type', '').lower() == 'hive'
+
         for plan in sync_plan['sync_plans']:
             if not plan['target_exists']:
                 try:
+                    # 获取完整的schema_mapping
+                    schema_mapping = plan['schema_mapping']
+
+                    # 如果是Hive目标，需要过滤掉分区字段dt
+                    # 如果是普通数据库，保留所有字段（包括dt）
+                    if is_hive_target:
+                        # Hive目标：过滤dt等分区字段
+                        filtered_schema = {
+                            "columns": [col for col in schema_mapping.get('columns', [])
+                                        if col.get('name', '').lower() not in ['dt', 'partition_date']]
+                        }
+                        logger.info(f"Hive目标，过滤分区字段后剩余 {len(filtered_schema['columns'])} 个字段")
+                    else:
+                        # 普通数据库：保留所有字段
+                        filtered_schema = schema_mapping
+                        logger.info(f"非Hive目标，保留所有 {len(filtered_schema.get('columns', []))} 个字段（包括dt）")
+
                     # 生成建表SQL
                     create_sql = await self._generate_create_table_sql(
-                        plan['schema_mapping'],
+                        filtered_schema,
                         plan['target_table'],
                         sync_plan['target_name']
                     )
@@ -1110,6 +1131,99 @@ class SmartSyncService:
                 'password': target_config.get('password')
             }
 
+            schema_mapping = table_plan.get('schema_mapping', {})
+            columns_mapping = schema_mapping.get('columns', [])
+
+            # 如果没有 schema_mapping，尝试直接获取表结构
+            if not columns_mapping:
+                logger.warning(f"表 {table_plan['source_table']} 没有schema_mapping，尝试直接获取表结构...")
+                source_name = sync_plan['source_name']
+                table_name = table_plan['source_table']
+
+                client = self.integration_service.connection_manager.get_client(source_name)
+                if client:
+                    try:
+                        schema_result = await client.get_table_schema(table_name)
+                        if schema_result and 'columns' in schema_result and schema_result['columns']:
+                            # 转换为标准的映射格式
+                            columns_mapping = []
+                            for idx, col in enumerate(schema_result['columns']):
+                                col_name = col.get('name', '').strip()
+                                if not col_name:
+                                    logger.warning(f"发现空字段名，跳过索引 {idx}")
+                                    continue
+
+                                col_type = col.get('type', 'VARCHAR').strip()
+                                if not col_type:
+                                    col_type = 'VARCHAR'
+
+                                target_type_mapped = self._map_data_type(col_type, target_config['type'])
+
+                                columns_mapping.append({
+                                    'name': col_name,
+                                    'source_type': col_type,
+                                    'target_type': target_type_mapped,
+                                    'nullable': col.get('nullable', True)
+                                })
+                            logger.info(f"成功直接获取并转换了 {len(columns_mapping)} 个字段")
+                    except Exception as e:
+                        logger.warning(f"直接获取表结构失败: {e}")
+
+            # 根据目标类型判断是否启用分区注入（只对 Hive 生效）
+            is_hive_target = str(target_config.get('type', '')).lower() == 'hive'
+
+            if is_hive_target:
+                partition_info = self._detect_partition_field(
+                    columns_mapping,
+                    table_plan.get('partition_column'),  # 从前端传入
+                    table_plan.get('partition_type', 'date')
+                )
+
+                # 🔧 处理字段列表 - 分离数据字段和分区字段（Hive 目标才分离）
+                data_columns = []
+                partition_column = None
+
+                for col in columns_mapping:
+                    col_name = col.get('name', '').lower().strip()
+                    if col_name and partition_info and col_name == partition_info['name'].lower():
+                        partition_column = col
+                    elif col_name:
+                        data_columns.append(col)
+
+                # 提取字段名
+                source_columns = [col.get('name') for col in data_columns if col.get('name')]
+                target_columns = source_columns.copy()
+
+                # 🔧 如果有分区字段,在 SELECT 中添加分区值（仅 Hive）
+                if partition_info:
+                    partition_value = self._generate_partition_value(partition_info['type'])
+
+                    source_columns_with_partition = source_columns + [
+                        f"'{partition_value}' as {partition_info['name']}"
+                    ]
+                    target_columns_with_partition = target_columns + [partition_info['name']]
+
+                    logger.info(f"检测到分区字段: {partition_info['name']} = {partition_value}")
+                    logger.info(f"分区类型: {partition_info['type']}")
+
+                    final_source_config['columns'] = source_columns_with_partition
+                    final_target_config['columns'] = target_columns_with_partition
+
+                    # 保存分区信息到配置
+                    final_target_config['partition_column'] = partition_info['name']
+                    final_target_config['partition_value'] = partition_value
+                else:
+                    final_source_config['columns'] = source_columns
+                    final_target_config['columns'] = target_columns
+            else:
+                # 非 Hive 目标：不做分区注入，字段按原始 columns_mapping 原样同步（包括 dt 在内）
+                # 直接使用 columns_mapping，不过滤任何字段
+                source_columns = [col.get('name') for col in columns_mapping if
+                                  col.get('name') and str(col.get('name', '')).strip()]
+                target_columns = source_columns.copy()
+                final_source_config['columns'] = source_columns
+                final_target_config['columns'] = target_columns
+
             # Hive特殊处理
             target_table_name = table_plan['target_table']
             if target_config['type'].lower() == 'hive':
@@ -1162,87 +1276,28 @@ class SmartSyncService:
                 final_source_config['file_type'] = source_config.get('file_type', 'orc')
                 final_source_config['field_delimiter'] = source_config.get('field_delimiter', '\t')
 
-            # 🔧 强化字段处理逻辑
-            schema_mapping = table_plan.get('schema_mapping', {})
-            columns_mapping = schema_mapping.get('columns', [])
-
+            # 🔧 确保 columns_mapping 已获取（如果前面获取失败，这里会抛出错误）
             if not columns_mapping:
-                logger.warning(f"表 {table_plan['source_table']} 没有schema_mapping，尝试直接获取表结构...")
-
-                # 直接通过数据库客户端获取表结构
-                source_name = sync_plan['source_name']
-                table_name = table_plan['source_table']
-
-                client = self.integration_service.connection_manager.get_client(source_name)
-                if not client:
-                    raise ValueError(f"无法获取数据源 {source_name} 的客户端连接")
-
-                # 获取表结构
-                schema_result = await client.get_table_schema(table_name)
-
-                if not schema_result or 'columns' not in schema_result or not schema_result['columns']:
-                    raise ValueError(f"无法获取表 {table_name} 的结构信息，schema_result: {schema_result}")
-
-                # 转换为标准的映射格式
-                columns_mapping = []
-                for idx, col in enumerate(schema_result['columns']):
-                    col_name = col.get('name', '').strip()
-                    if not col_name:
-                        logger.warning(f"发现空字段名，跳过索引 {idx}")
-                        continue
-
-                    col_type = col.get('type', 'VARCHAR').strip()
-                    if not col_type:
-                        col_type = 'VARCHAR'
-
-                    target_type_mapped = self._map_data_type(col_type, target_config['type'])
-
-                    columns_mapping.append({
-                        'name': col_name,
-                        'source_type': col_type,
-                        'target_type': target_type_mapped,
-                        'nullable': col.get('nullable', True)
-                    })
-
-                if not columns_mapping:
-                    raise ValueError(f"表 {table_name} 转换后没有有效的字段信息")
-
-                logger.info(f"成功直接获取并转换了 {len(columns_mapping)} 个字段")
-
-            # 过滤掉分区字段，只保留数据字段
-            data_columns = []
-            for col in columns_mapping:
-                col_name = col.get('name', '').lower().strip()
-                if col_name and col_name not in ['dt', 'partition_date']:
-                    data_columns.append(col)
-
-            # 提取字段名，确保非空
-            source_columns = []
-            target_columns = []
-
-            for col in data_columns:
-                col_name = str(col.get('name', '')).strip()
-                if col_name:
-                    source_columns.append(col_name)
-                    target_columns.append(col_name)
-
-            logger.info(
-                f"字段配置: 源字段({len(source_columns)})={source_columns[:5] if len(source_columns) > 5 else source_columns}...")
-            logger.info(
-                f"字段配置: 目标字段({len(target_columns)})={target_columns[:5] if len(target_columns) > 5 else target_columns}...")
-
-            # 严格检查字段列表
-            if not source_columns or not target_columns:
-                raise ValueError(
-                    f"表 {table_plan['source_table']} 处理后字段列表为空，原始字段数: {len(columns_mapping)}, 数据字段数: {len(data_columns)}")
+                raise ValueError(f"表 {table_plan['source_table']} 无法获取字段映射信息，请检查 schema_mapping 或数据源连接")
 
             # 确定写入模式
             write_mode = self._determine_write_mode(table_plan, sync_plan.get('sync_mode', 'full'))
-
-            # 手动添加字段配置
-            final_source_config['columns'] = source_columns
-            final_target_config['columns'] = target_columns
             final_target_config['write_mode'] = write_mode
+
+            # 如果前面已经处理了分区，字段列表已经在 final_source_config 和 final_target_config 中设置了
+            # 如果没有分区处理，这里确保字段列表已设置
+            if 'columns' not in final_source_config or not final_source_config['columns']:
+                # 如果前面没有设置字段（通常不会发生），这里作为后备
+                source_columns = [col.get('name') for col in data_columns if col.get('name')]
+                target_columns = source_columns.copy()
+                final_source_config['columns'] = source_columns
+                final_target_config['columns'] = target_columns
+                logger.warning("使用后备字段列表设置")
+
+            logger.info(
+                f"字段配置: 源字段({len(final_source_config['columns'])})={final_source_config['columns'][:5] if len(final_source_config['columns']) > 5 else final_source_config['columns']}...")
+            logger.info(
+                f"字段配置: 目标字段({len(final_target_config['columns'])})={final_target_config['columns'][:5] if len(final_target_config['columns']) > 5 else final_target_config['columns']}...")
 
             # 🔧 构建最终的DataX配置
             datax_config = {
@@ -1352,6 +1407,87 @@ class SmartSyncService:
     #         logger.warning(f"类型映射异常 {source_type} -> {target_type}: {e}")
     #         # 异常时返回安全的默认类型
     #         return 'STRING' if str(target_type).lower() == 'hive' else 'VARCHAR(255)'
+
+    def _detect_partition_field(
+            self,
+            columns: List[Dict],
+            user_specified: Optional[str] = None,
+            partition_type: str = 'date'
+    ) -> Optional[Dict]:
+        """
+        检测分区字段
+
+        Args:
+            columns: 字段列表
+            user_specified: 用户指定的分区字段名
+            partition_type: 分区类型
+
+        Returns:
+            分区字段信息或None
+        """
+        # 1. 优先使用用户指定的分区字段
+        if user_specified:
+            for col in columns:
+                if col.get('name', '').lower() == user_specified.lower():
+                    return {
+                        'name': col['name'],  # 保持原始大小写
+                        'type': partition_type,
+                        'user_specified': True
+                    }
+            logger.warning(f"用户指定的分区字段 '{user_specified}' 不存在于字段列表中")
+
+        # 2. 自动检测常见分区字段
+        common_partition_names = [
+            'dt',  # 最常用
+            'partition_date',
+            'ds',  # 数仓常用
+            'date',
+            'partition_day',
+            'create_date',
+            'etl_date',
+            'data_date',
+            'biz_date',
+            'partition_time',
+            'part_date'
+        ]
+
+        for partition_name in common_partition_names:
+            for col in columns:
+                col_name = col.get('name', '').lower()
+                if col_name == partition_name:
+                    logger.info(f"自动检测到分区字段: {col['name']}")
+                    return {
+                        'name': col['name'],
+                        'type': partition_type,
+                        'user_specified': False
+                    }
+
+        logger.info("未检测到分区字段")
+        return None
+
+    def _generate_partition_value(self, partition_type: str) -> str:
+        """
+        生成分区值
+
+        Args:
+            partition_type: 分区类型 (date/hour/month/year/custom)
+
+        Returns:
+            分区值字符串
+        """
+        from datetime import datetime
+
+        format_map = {
+            'date': '%Y-%m-%d',  # 2025-11-06
+            'datetime': '%Y-%m-%d %H:%M:%S',  # 2025-11-06 12:00:00
+            'hour': '%Y-%m-%d-%H',  # 2025-11-06-12
+            'month': '%Y-%m',  # 2025-11
+            'year': '%Y',  # 2025
+            'timestamp': '%Y%m%d%H%M%S'  # 20251106120000
+        }
+
+        date_format = format_map.get(partition_type, '%Y-%m-%d')
+        return datetime.now().strftime(date_format)
 
     async def _analyze_field_lengths(self, source_name: str, table_name: str, columns: List[Dict]) -> Dict[str, int]:
         """分析字段实际使用的最大长度"""
@@ -1678,96 +1814,96 @@ class SmartSyncService:
         return warnings
 
     async def _get_data_source_config(self, source_name: str) -> Optional[Dict[str, Any]]:
-        """获取数据源配置"""
+        """获取数据源配置 - 包含真实密码"""
         try:
-            # 从实际的数据集成服务获取数据源配置
-            sources_list = await self.integration_service.get_data_sources_list_basic()
+            # 🔧 关键修复: 直接从数据库获取真实密码,而不是从 connection_manager
+            from app.utils.database import async_session_maker
+            from app.models.data_source import DataSource
+            from sqlalchemy import select
 
-            # 查找指定名称的数据源
-            target_source = None
-            for source in sources_list:
-                if source.get('name') == source_name:
-                    target_source = source
-                    break
+            async with async_session_maker() as db:
+                result = await db.execute(
+                    select(DataSource).where(
+                        DataSource.name == source_name,
+                        DataSource.is_active == True
+                    )
+                )
+                datasource = result.scalar_one_or_none()
 
-            if not target_source:
-                logger.error(f"未找到数据源: {source_name}")
-                return None
+                if not datasource:
+                    logger.error(f"未找到数据源: {source_name}")
+                    return None
 
-            # 🔧 修复：确保类型映射正确
-            source_type = target_source.get('type', '').lower()
-            if not source_type:
-                logger.error(f"数据源 {source_name} 类型为空")
-                return None
+                # 从数据库的 connection_config 中获取真实配置
+                connection_config = datasource.connection_config or {}
+                source_type = datasource.source_type.lower()
 
-            # 映射数据源类型
-            type_mapping = {
-                'mysql': 'mysql',
-                'kingbase': 'kingbase',
-                'hive': 'hive',
-                'postgresql': 'postgresql',
-                'oracle': 'oracle',
-                'doris': 'doris'
-            }
+                # 映射数据源类型
+                type_mapping = {
+                    'mysql': 'mysql',
+                    'kingbase': 'kingbase',
+                    'hive': 'hive',
+                    'postgresql': 'postgresql',
+                    'oracle': 'oracle',
+                    'doris': 'doris'
+                }
+                mapped_type = type_mapping.get(source_type, source_type)
 
-            mapped_type = type_mapping.get(source_type, source_type)
+                # 获取真实密码
+                password = connection_config.get('password', '')
+                username = connection_config.get('username', '')
 
-            # 🔧 重要修复：确保密码不为空
-            password = target_source.get('password', '')
-            if not password:
-                # 如果密码为空，尝试从其他地方获取或使用默认值
-                logger.warning(f"数据源 {source_name} 密码为空，请检查配置")
+                if not password:
+                    logger.warning(f"数据源 {source_name} 密码为空，请检查配置")
+                if not username:
+                    logger.warning(f"数据源 {source_name} 用户名为空，请检查配置")
 
-            username = target_source.get('username', '')
-            if not username:
-                logger.warning(f"数据源 {source_name} 用户名为空，请检查配置")
+                config = {
+                    "type": mapped_type,
+                    "host": connection_config.get('host', ''),
+                    "port": connection_config.get('port', 3306),
+                    "database": connection_config.get('database', ''),
+                    "username": username,
+                    "password": password,  # 真实密码,未脱敏
+                }
 
-            config = {
-                "type": mapped_type,
-                "host": target_source.get('host', ''),
-                "port": target_source.get('port', 3306),
-                "database": target_source.get('database', ''),
-                "username": username,
-                "password": password,
-            }
+                # Hive特殊配置
+                if mapped_type == 'hive':
+                    config.update({
+                        'namenode_host': connection_config.get('namenode_host', '192.142.76.242'),
+                        'namenode_port': connection_config.get('namenode_port', '8020'),
+                        'base_path': connection_config.get('base_path', '/user/hive/warehouse'),
+                        'storage_format': 'ORC',
+                        'compression': 'snappy',
+                        'field_delimiter': connection_config.get('field_delimiter', '\t'),
+                        'add_ods_prefix': connection_config.get('add_ods_prefix', True),
+                        'partition_column': 'dt'
+                    })
 
-            # 🆕 Hive特殊配置
-            if mapped_type == 'hive':
-                config.update({
-                    'namenode_host': target_source.get('namenode_host', '192.142.76.242'),
-                    'namenode_port': target_source.get('namenode_port', '8020'),
-                    'base_path': target_source.get('base_path', '/user/hive/warehouse'),
-                    'storage_format': 'ORC',
-                    'compression': 'snappy',
-                    'field_delimiter': target_source.get('field_delimiter', '\t'),
-                    'add_ods_prefix': target_source.get('add_ods_prefix', True),
-                    'partition_column': 'dt'
-                })
+                # Doris特殊配置
+                if mapped_type == 'doris':
+                    config['http_port'] = 8060
+                    if config['port'] == 3306:
+                        config['port'] = 9030
 
-            # 🆕 Doris特殊配置
-            if mapped_type == 'doris':
-                # Doris需要额外的HTTP端口配置
-                config['http_port'] = 8060  # FE HTTP端口
-                # Doris的查询端口通常是9030
-                if config['port'] == 3306:  # 如果是默认MySQL端口，改为Doris端口
-                    config['port'] = 9030
-            # 🔧 验证必要字段
-            required_fields = ['host', 'username', 'password']
-            missing_fields = [field for field in required_fields if not config.get(field)]
+                # 验证必要字段
+                required_fields = ['host', 'username', 'password']
+                missing_fields = [field for field in required_fields if not config.get(field)]
 
-            if missing_fields:
-                logger.error(f"数据源 {source_name} 缺少必要字段: {missing_fields}")
-                logger.error(f"当前配置: {config}")
-                return None
+                if missing_fields:
+                    logger.error(f"数据源 {source_name} 缺少必要字段: {missing_fields}")
+                    return None
 
-            logger.info(f"获取数据源配置成功: {source_name} -> {mapped_type}")
-            logger.info(
-                f"配置详情: host={config['host']}, username={config['username']}, password={'***' if config['password'] else 'EMPTY'}")
+                logger.info(f"获取数据源配置成功: {source_name} -> {mapped_type}")
+                logger.info(
+                    f"配置详情: host={config['host']}, username={config['username']}, password={'***已加载' if config['password'] else 'EMPTY'}")
 
-            return config
+                return config
 
         except Exception as e:
             logger.error(f"获取数据源配置失败 {source_name}: {e}")
+            import traceback
+            logger.error(traceback.format_exc())
             return None
 
     async def _check_target_table_exists(self, target_name: str, table_name: str) -> bool:
