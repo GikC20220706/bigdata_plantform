@@ -99,6 +99,7 @@ class JobWorkRunService:
             logger.error(f"运行作业失败: {e}")
             raise
 
+
     async def stop_work(
             self,
             db: AsyncSession,
@@ -239,6 +240,31 @@ class JobWorkRunService:
         )
         return result.scalar_one_or_none()
 
+    def _serialize_result_data(self, data: Any) -> Any:
+        """
+        递归序列化结果数据,将 datetime 对象转换为字符串
+
+        Args:
+            data: 需要序列化的数据
+
+        Returns:
+            序列化后的数据
+        """
+        import json
+        from datetime import datetime, date
+
+        def datetime_handler(obj):
+            if isinstance(obj, (datetime, date)):
+                return obj.isoformat()
+            raise TypeError(f"Object of type {type(obj)} is not JSON serializable")
+
+        # 将数据转换为 JSON 字符串再转回来,确保所有 datetime 都被转换
+        try:
+            json_str = json.dumps(data, default=datetime_handler, ensure_ascii=False)
+            return json.loads(json_str)
+        except Exception as e:
+            logger.warning(f"序列化结果数据失败: {e}, 返回原数据")
+            return data
     async def _execute_work_async(
             self,
             work_instance_id: str,
@@ -314,7 +340,12 @@ class JobWorkRunService:
 
                 if result.get('success'):
                     work_instance.status = JobInstanceStatus.SUCCESS
-                    work_instance.result_data = result.get('data')
+                    # 序列化 result_data,将 datetime 转换为字符串
+                    result_data = result.get('data')
+                    if result_data:
+                        work_instance.result_data = self._serialize_result_data(result_data)
+                    else:
+                        work_instance.result_data = result_data
 
                     # 添加成功日志
                     submit_log_lines.append(
@@ -375,7 +406,6 @@ class JobWorkRunService:
                     await db.commit()
             except:
                 pass
-
 
 # 创建全局实例
 job_work_run_service = JobWorkRunService()

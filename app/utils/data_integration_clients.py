@@ -1299,42 +1299,106 @@ class HiveClient(DatabaseClient):
     def __init__(self, config: Dict[str, Any]):
         super().__init__(config)
         self.connection = None
+        self._last_activity = None  # 最后活动时间
+        self._connection_timeout = 300  # 5分钟超时
+
+    def _is_connection_valid(self) -> bool:
+        """检查连接是否有效"""
+        if not self.connection:
+            return False
+
+        # 检查超时
+        if self._last_activity:
+            from datetime import datetime, timedelta
+            if datetime.now() - self._last_activity > timedelta(seconds=self._connection_timeout):
+                logger.info("Hive连接超时,需要重连")
+                return False
+
+        # 尝试执行简单查询测试连接
+        try:
+            cursor = self.connection.cursor()
+            cursor.execute("SELECT 1")
+            cursor.fetchone()
+            cursor.close()
+            return True
+        except Exception as e:
+            logger.warning(f"Hive连接无效: {e}")
+            return False
+
+    def _close_connection(self):
+        """关闭现有连接"""
+        if self.connection:
+            try:
+                self.connection.close()
+            except Exception as e:
+                logger.warning(f"关闭Hive连接失败: {e}")
+            finally:
+                self.connection = None
+                self._last_activity = None
 
     def _get_connection(self):
-        """获取Hive连接"""
-        if not self.connection:
+        """获取Hive连接 - 带自动重连"""
+        from datetime import datetime
+
+        # 检查现有连接是否有效
+        if not self._is_connection_valid():
+            logger.info("创建新的Hive连接...")
+            self._close_connection()
+
             try:
                 from pyhive import hive
-                self.connection = hive.Connection(
-                    host=self.config['host'],
-                    port=self.config.get('port', 10000),
-                    username=self.config['username'],
-                    password=self.config.get('password'),
-                    database=self.config.get('database', 'default'),
-                    auth='CUSTOM' if self.config.get('password') else 'NONE'
-                )
+
+                # ✅ 移除不支持的 connect_timeout 参数
+                connection_params = {
+                    'host': self.config['host'],
+                    'port': self.config.get('port', 10000),
+                    'username': self.config['username'],
+                    'database': self.config.get('database', 'default')
+                }
+
+                # 根据是否有密码选择认证方式
+                if self.config.get('password'):
+                    connection_params['auth'] = 'CUSTOM'
+                    connection_params['password'] = self.config['password']
+                else:
+                    connection_params['auth'] = 'NONE'
+
+                self.connection = hive.Connection(**connection_params)
+                self._last_activity = datetime.now()
+                logger.info("Hive连接创建成功")
+
             except ImportError:
                 logger.error("pyhive库未安装，请安装: pip install pyhive[hive]")
                 raise
+            except Exception as e:
+                logger.error(f"Hive连接失败: {e}")
+                raise
+
+        # 更新最后活动时间
+        self._last_activity = datetime.now()
         return self.connection
 
     async def test_connection(self) -> Dict[str, Any]:
         """测试Hive连接"""
         try:
+            # 强制重新连接测试
+            self._close_connection()
             conn = self._get_connection()
+
             cursor = conn.cursor()
-            cursor.execute("SELECT version()")
+            cursor.execute("SELECT 1")
             result = cursor.fetchone()
             cursor.close()
 
             return {
                 "success": True,
-                "version": result[0] if result else "未知",
+                "version": "Hive",
                 "database_type": "Apache Hive",
                 "test_time": datetime.now(),
                 "response_time_ms": 100
             }
         except Exception as e:
+            logger.error(f"Hive连接测试失败: {e}")
             return {
                 "success": False,
                 "error": str(e),
@@ -1353,6 +1417,8 @@ class HiveClient(DatabaseClient):
             return [db[0] for db in results]
         except Exception as e:
             logger.error(f"获取Hive数据库列表失败: {e}")
+            # 连接失败时重置连接
+            self._close_connection()
             return []
 
     async def get_tables(self, database: str = None, schema: str = None, limit: int = 100, offset: int = 0) -> List[Dict[str, Any]]:
@@ -1361,43 +1427,49 @@ class HiveClient(DatabaseClient):
             conn = self._get_connection()
             cursor = conn.cursor()
 
-            if database:
-                cursor.execute(f"USE {database}")
+            # 切换数据库
+            target_db = database or self.config.get('database', 'default')
+            logger.info(f"切换到数据库: {target_db}")
+            cursor.execute(f"USE {target_db}")
 
+            # 获取表列表
+            logger.info("执行 SHOW TABLES")
             cursor.execute("SHOW TABLES")
             table_names = [row[0] for row in cursor.fetchall()]
+            logger.info(f"找到 {len(table_names)} 张表")
+
+            # 应用分页
+            paginated_tables = table_names[offset:offset + limit]
 
             tables = []
-            for table_name in table_names:
+            for table_name in paginated_tables:
                 try:
-                    cursor.execute(f"DESCRIBE FORMATTED {table_name}")
-                    desc_result = cursor.fetchall()
-
-                    # 解析表信息
-                    table_info = {"table_name": table_name, "table_type": "MANAGED_TABLE"}
-                    for row in desc_result:
-                        if len(row) >= 2:
-                            key = row[0].strip() if row[0] else ""
-                            value = row[1].strip() if row[1] else ""
-
-                            if key == "Table Type":
-                                table_info["table_type"] = value
-                            elif key == "Location":
-                                table_info["location"] = value
-                            elif key == "Owner":
-                                table_info["owner"] = value
-                            elif key == "CreateTime":
-                                table_info["created_at"] = value
-
-                    tables.append(table_info)
-                except Exception as e:
-                    logger.warning(f"获取表 {table_name} 信息失败: {e}")
-                    tables.append({"table_name": table_name, "table_type": "UNKNOWN"})
+                    # 获取表信息(简化版,不获取详细信息避免太慢)
+                    tables.append({
+                        "table_name": table_name,
+                        "table_type": "MANAGED_TABLE",
+                        "estimated_rows": 0,
+                        "data_size": 0,
+                        "comment": ""
+                    })
+                except Exception as table_err:
+                    logger.warning(f"获取表 {table_name} 信息失败: {table_err}")
+                    tables.append({
+                        "table_name": table_name,
+                        "table_type": "UNKNOWN",
+                        "estimated_rows": 0,
+                        "data_size": 0,
+                        "comment": ""
+                    })
 
             cursor.close()
+            logger.info(f"成功返回 {len(tables)} 张表")
             return tables
+
         except Exception as e:
             logger.error(f"获取Hive表列表失败: {e}")
+            # 连接失败时重置连接
+            self._close_connection()
             return []
 
     async def get_table_schema(self, table_name: str, database: str = None) -> Dict[str, Any]:

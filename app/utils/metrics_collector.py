@@ -25,6 +25,7 @@ class ConfigurableMetricsCollector:
     """
 
     def __init__(self):
+        self.DISABLE_SSH_MONITORING = True
         self.use_real_clusters = settings.use_real_clusters
 
         # Cache configuration
@@ -329,6 +330,13 @@ class ConfigurableMetricsCollector:
         """
         hostname = node_config['host']
         cache_key = f"node_{hostname}"
+
+        if self.DISABLE_SSH_MONITORING:
+            logger.debug(f"SSH监控已禁用: {hostname}")
+            result = self._get_mock_node_metrics()
+            result['hostname'] = hostname
+            result['node_name'] = node_config.get('name', hostname)
+            return result
 
         # Check node-level cache
         cached_data = self._get_from_cache(cache_key)

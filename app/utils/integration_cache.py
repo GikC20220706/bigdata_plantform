@@ -170,7 +170,9 @@ def cache_data_source_operation(cache_type: str, ttl: int = 300):
         async def wrapper(*args, **kwargs):
             # 生成缓存键
             func_name = func.__name__
-            args_str = "_".join(str(arg) for arg in args if isinstance(arg, (str, int)))
+            # 跳过第一个参数 self
+            args_for_key = args[1:] if args else args
+            args_str = "_".join(str(arg) for arg in args_for_key if isinstance(arg, (str, int)))
             kwargs_str = "_".join(f"{k}_{v}" for k, v in kwargs.items() if isinstance(v, (str, int)))
 
             cache_key = f"{cache_type}_{func_name}_{args_str}_{kwargs_str}"

@@ -418,19 +418,38 @@ class DataXIntegrationService:
         }
 
         return type_mapping.get(base_type, 'string')
+
     def _get_writer_config(self, target: Dict[str, Any]) -> Dict[str, Any]:
         """根据目标类型生成writer配置"""
         db_type = target['type'].lower()
+
+        # 获取写入模式,默认追加
+        write_mode = target.get('write_mode', 'append')  # 'append' 或 'overwrite'
 
         if db_type == 'mysql':
             columns = target.get('columns', [])
             if not columns:
                 raise ValueError("MySQL Writer缺少字段配置")
 
+            # MySQL的写入模式处理
+            # DataX mysqlwriter的writeMode固定为insert
+            mysql_write_mode = 'insert'
+
+            # 获取已有的preSql(如果有的话)
+            pre_sql = []
+            if target.get('pre_sql'):
+                pre_sql = target['pre_sql'].copy() if isinstance(target['pre_sql'], list) else [target['pre_sql']]
+
+            # 如果是覆写模式,在preSql前面添加TRUNCATE
+            if write_mode == 'overwrite':
+                truncate_sql = f"TRUNCATE TABLE {target['table']}"
+                pre_sql.insert(0, truncate_sql)
+                logger.info(f"MySQL覆写模式:将执行 {truncate_sql}")
+
             return {
                 "name": "mysqlwriter",
                 "parameter": {
-                    "writeMode": target.get('write_mode', 'insert'),
+                    "writeMode": mysql_write_mode,  # 固定为insert
                     "username": target['username'],
                     "password": target['password'],
                     "column": columns,
@@ -438,7 +457,7 @@ class DataXIntegrationService:
                         "jdbcUrl": f"jdbc:mysql://{target['host']}:{target['port']}/{target['database']}?useUnicode=true&characterEncoding=utf8",
                         "table": [target['table']]
                     }],
-                    "preSql": target.get('pre_sql', []),
+                    "preSql": pre_sql,
                     "postSql": target.get('post_sql', [])
                 }
             }
@@ -448,6 +467,16 @@ class DataXIntegrationService:
             if not columns:
                 raise ValueError("Doris Writer缺少字段配置")
 
+            # Doris的写入模式处理
+            pre_sql = []
+            if target.get('pre_sql'):
+                pre_sql = target['pre_sql'].copy() if isinstance(target['pre_sql'], list) else [target['pre_sql']]
+
+            if write_mode == 'overwrite':
+                truncate_sql = f"TRUNCATE TABLE {target['table']}"
+                pre_sql.insert(0, truncate_sql)
+                logger.info(f"Doris覆写模式:将执行 {truncate_sql}")
+
             return {
                 "name": "doriswriter",
                 "parameter": {
@@ -455,8 +484,8 @@ class DataXIntegrationService:
                     "column": columns,
                     "username": target['username'],
                     "password": target['password'],
+                    "preSql": pre_sql,
                     "postSql": target.get('post_sql', []),
-                    "preSql": target.get('pre_sql', []),
                     "flushInterval": target.get('flush_interval', 30000),
                     "connection": [{
                         "jdbcUrl": f"jdbc:mysql://{target['host']}:{target['port']}/{target['database']}",
@@ -476,16 +505,15 @@ class DataXIntegrationService:
                 raise ValueError("Hive Writer缺少字段配置")
             file_type = target.get('file_type', 'orc').lower()
 
-            # 获取写入模式,默认追加
-            write_mode = target.get('write_mode', 'append')
-
-            # DataX HDFS Writer 的 writeMode 支持: append, nonConflict, truncate
-            # 映射我们的模式到 DataX 的模式
+            # Hive(HDFS Writer)的写入模式映射
+            # append → append, overwrite → truncate
             datax_write_mode_map = {
-                'append': 'append',  # 追加
-                'overwrite': 'truncate',  # 覆写(DataX中用truncate表示清空后写入)
+                'append': 'append',
+                'overwrite': 'truncate',
             }
             datax_write_mode = datax_write_mode_map.get(write_mode, 'append')
+
+            logger.info(f"Hive写入模式: {write_mode} → DataX模式: {datax_write_mode}")
 
             writer_params = {
                 "defaultFS": f"hdfs://{target['namenode_host']}:{target['namenode_port']}",
@@ -497,23 +525,31 @@ class DataXIntegrationService:
                 "encoding": "UTF-8"
             }
 
-            # 根据文件类型设置特定参数
             if file_type == 'text':
                 writer_params["fieldDelimiter"] = target.get('field_delimiter', '\t')
-
             elif file_type == 'orc':
                 writer_params["compress"] = target.get('compression', 'snappy')
                 writer_params["fieldDelimiter"] = target.get('field_delimiter', '\t')
+
             return {
                 "name": "hdfswriter",
                 "parameter": writer_params
             }
 
-
         elif db_type == 'kingbase':
             columns = target.get('columns', [])
             if not columns:
                 raise ValueError("KingBase Writer缺少字段配置")
+
+            # KingBase的写入模式处理
+            pre_sql = []
+            if target.get('pre_sql'):
+                pre_sql = target['pre_sql'].copy() if isinstance(target['pre_sql'], list) else [target['pre_sql']]
+
+            if write_mode == 'overwrite':
+                truncate_sql = f"TRUNCATE TABLE {target['table']}"
+                pre_sql.insert(0, truncate_sql)
+                logger.info(f"KingBase覆写模式:将执行 {truncate_sql}")
 
             return {
                 "name": "kingbaseeswriter",
@@ -525,7 +561,7 @@ class DataXIntegrationService:
                         "jdbcUrl": f"jdbc:kingbase8://{target['host']}:{target['port']}/{target['database']}",
                         "table": [target['table']]
                     }],
-                    "preSql": target.get('pre_sql', []),
+                    "preSql": pre_sql,
                     "postSql": target.get('post_sql', [])
                 }
             }
@@ -534,6 +570,17 @@ class DataXIntegrationService:
             columns = target.get('columns', [])
             if not columns:
                 raise ValueError("PostgreSQL Writer缺少字段配置")
+
+            # PostgreSQL的写入模式处理
+            postgresql_write_mode = 'insert'
+            pre_sql = []
+            if target.get('pre_sql'):
+                pre_sql = target['pre_sql'].copy() if isinstance(target['pre_sql'], list) else [target['pre_sql']]
+
+            if write_mode == 'overwrite':
+                truncate_sql = f"TRUNCATE TABLE {target['table']}"
+                pre_sql.insert(0, truncate_sql)
+                logger.info(f"PostgreSQL覆写模式:将执行 {truncate_sql}")
 
             return {
                 "name": "postgresqlwriter",
@@ -545,8 +592,8 @@ class DataXIntegrationService:
                         "jdbcUrl": f"jdbc:postgresql://{target['host']}:{target['port']}/{target['database']}",
                         "table": [target['table']]
                     }],
-                    "writeMode": target.get('write_mode', 'insert'),
-                    "preSql": target.get('pre_sql', []),
+                    "writeMode": postgresql_write_mode,
+                    "preSql": pre_sql,
                     "postSql": target.get('post_sql', [])
                 }
             }

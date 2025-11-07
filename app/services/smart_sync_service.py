@@ -347,7 +347,10 @@ class SmartSyncService:
                         'source_table': plan['source_table'],
                         'target_table': plan['target_table'],
                         'target_exists': plan.get('target_exists', False),
-                        'strategy': plan.get('strategy', 'full_copy')
+                        'strategy': plan.get('strategy', 'full_copy'),
+                        'write_mode': plan.get('write_mode', 'append'),
+                        'partition_column': plan.get('partition_column'),
+                        'partition_type': plan.get('partition_type', 'date')
                         # 🔧 故意不包含 schema_mapping，避免55个字段的复杂对象
                     }
 
@@ -1097,6 +1100,12 @@ class SmartSyncService:
 
     async def _generate_datax_config(self, sync_plan: Dict[str, Any], table_plan: Dict[str, Any]) -> Dict[str, Any]:
         """生成DataX配置"""
+
+        # ✅ 添加调试日志
+        logger.info(f"====== 开始构建DataX配置 ======")
+        logger.info(f"sync_plan: {sync_plan}")
+        logger.info(f"table_plan: {table_plan}")
+        logger.info(f"table_plan中的write_mode: {table_plan.get('write_mode')}")
         try:
             source_config = await self._get_data_source_config(sync_plan['source_name'])
             target_config = await self._get_data_source_config(sync_plan['target_name'])
@@ -1574,19 +1583,40 @@ class SmartSyncService:
 
         logger.info(f"字段长度分析完成，结果: {field_lengths}")
         return field_lengths
+
     def _determine_write_mode(self, table_plan: Dict[str, Any], sync_mode: str) -> str:
         """根据情况决定写入模式"""
+
+        # ✅ 添加日志
+        logger.info(f"====== _determine_write_mode 开始 ======")
+        logger.info(f"table_plan参数: {table_plan}")
+        logger.info(f"sync_mode参数: {sync_mode}")
+        logger.info(f"table_plan中是否有write_mode: {'write_mode' in table_plan}")
+        if 'write_mode' in table_plan:
+            logger.info(f"table_plan['write_mode']值: {table_plan['write_mode']}")
+
+        # 优先使用用户明确指定的写入模式
+        if 'write_mode' in table_plan and table_plan['write_mode']:
+            user_write_mode = table_plan['write_mode']
+            logger.info(f"✅ 使用用户指定的写入模式: {user_write_mode}")
+            return user_write_mode
+
+        # 如果用户没有指定,则根据情况自动判断
+        logger.info(f"⚠️ 用户未指定write_mode,使用自动判断逻辑")
         target_exists = table_plan.get('target_exists', False)
         strategy = table_plan.get('strategy', 'full_copy')
 
         if not target_exists:
-            return "insert"
+            result = "append"
         elif strategy == 'incremental_update':
-            return "insert"
+            result = "append"
         elif sync_mode == 'full' or strategy in ['full_copy', 'batch_insert']:
-            return "replace"
+            result = "overwrite"
         else:
-            return "insert"
+            result = "append"
+
+        logger.info(f"自动判断结果: {result}")
+        return result
 
     async def _verify_sync_integrity(self, sync_plan: Dict[str, Any],
                                      table_plan: Dict[str, Any]) -> Dict[str, Any]:
