@@ -63,9 +63,15 @@ class JobWorkflowRunService:
             # 3. 解析流程图配置
             execution_plan = await self._parse_workflow_config(workflow)
 
-            # 4. 创建作业实例
+            # 4. 只为画布上的作业创建实例
+            work_order = execution_plan.get('workOrder', [])
+            works_on_canvas = [work for work in workflow.works if work.id in work_order]
+
+            logger.info(f"[作业流运行] 画布上的作业数: {len(works_on_canvas)}, 总作业数: {len(workflow.works)}")
+
+            # 创建作业实例
             work_instances = await self._create_work_instances(
-                db, workflow_instance, workflow.works
+                db, workflow_instance, works_on_canvas
             )
 
             # 5. 异步执行作业流（后台任务）
@@ -201,17 +207,20 @@ class JobWorkflowRunService:
             return {
                 "workflowInstanceId": workflow_instance_id,
                 "workflowName": workflow_instance.workflow_name,
+                "flowStatus": workflow_instance.status.value,  # 前端期望的字段名
                 "status": workflow_instance.status.value,
                 "triggerType": workflow_instance.trigger_type.value,
                 "startDatetime": workflow_instance.start_datetime.isoformat() if workflow_instance.start_datetime else None,
                 "endDatetime": workflow_instance.end_datetime.isoformat() if workflow_instance.end_datetime else None,
                 "errorMessage": workflow_instance.error_message,
                 "workStatus": status_counts,
-                "works": [
+                "workInstances": [  # 前端期望的字段名
                     {
-                        "instanceId": wi.instance_id,
+                        "workInstanceId": wi.instance_id,  # 作业实例ID
+                        "workId": wi.work_id,  # 作业ID(重要!前端用这个来匹配节点)
                         "workName": wi.work_name,
                         "workType": wi.work_type,
+                        "runStatus": wi.status.value,  # 前端期望的字段名
                         "status": wi.status.value,
                         "startDatetime": wi.start_datetime.isoformat() if wi.start_datetime else None,
                         "endDatetime": wi.end_datetime.isoformat() if wi.end_datetime else None,
@@ -301,51 +310,81 @@ class JobWorkflowRunService:
             workflow: JobWorkflow
     ) -> Dict[str, Any]:
         """
-        解析流程图配置，生成执行计划
+        解析流程图配置,生成执行计划
 
         web_config 格式示例:
         [
-            {"id": "node1", "type": "start", "x": 100, "y": 100},
-            {"id": "node2", "type": "work", "workId": 1, "x": 300, "y": 100},
-            {"id": "edge1", "type": "edge", "source": "node1", "target": "node2"}
+            {"shape": "dag-node", "id": 1, "data": {"workId": 1, "name": "作业1"}},
+            {"shape": "edge", "source": {"cell": 1}, "target": {"cell": 2}}
         ]
         """
         web_config = workflow.web_config or []
 
+        logger.info(f"[解析流程图] 开始解析流程图配置, 节点数: {len(web_config)}")
+
         # 提取节点和边
         nodes = []
         edges = []
-        work_nodes = {}
+        work_nodes = {}  # node_id -> work_id 的映射
 
         for item in web_config:
-            item_type = item.get('type', '')
+            shape = item.get('shape', '')
 
-            if item_type == 'work':
+            logger.debug(f"[解析流程图] 处理元素: shape={shape}, item={item}")
+
+            # 识别作业节点
+            if shape == 'dag-node':
                 nodes.append(item)
-                work_id = item.get('workId')
+                # 作业节点的ID就是作业的ID
+                node_id = item.get('id')
+                # workId 可能在 data 中或直接在 item 中
+                work_id = item.get('data', {}).get('workId') or item.get('workId') or item.get('id')
+
                 if work_id:
-                    work_nodes[item['id']] = work_id
-            elif item_type == 'edge':
+                    work_nodes[node_id] = work_id
+                    logger.info(f"[解析流程图] 找到作业节点: node_id={node_id}, work_id={work_id}")
+            # 识别边
+            elif shape == 'edge':
                 edges.append(item)
+                source = item.get('source', {})
+                target = item.get('target', {})
+                source_cell = source.get('cell') if isinstance(source, dict) else source
+                target_cell = target.get('cell') if isinstance(target, dict) else target
+                logger.info(f"[解析流程图] 找到边: source={source_cell}, target={target_cell}")
+
+        logger.info(f"[解析流程图] 解析完成: 作业节点数={len(work_nodes)}, 边数={len(edges)}")
+        logger.info(f"[解析流程图] 作业节点映射: {work_nodes}")
 
         # 构建依赖关系图
         dependency_graph = {}  # work_id -> [依赖的work_id列表]
-        work_order = []  # 执行顺序
 
         for node_id, work_id in work_nodes.items():
             dependencies = []
 
             # 找出所有指向该节点的边
             for edge in edges:
-                if edge.get('target') == node_id:
-                    source_node_id = edge.get('source')
-                    if source_node_id in work_nodes:
-                        dependencies.append(work_nodes[source_node_id])
+                source = edge.get('source', {})
+                target = edge.get('target', {})
+
+                # 提取source和target的cell值
+                target_cell = target.get('cell') if isinstance(target, dict) else target
+                source_cell = source.get('cell') if isinstance(source, dict) else source
+
+                # 如果边指向当前节点
+                if target_cell == node_id:
+                    # 找到源节点对应的work_id
+                    if source_cell in work_nodes:
+                        dependencies.append(work_nodes[source_cell])
+                        logger.info(f"[解析流程图] 作业 {work_id} 依赖 {work_nodes[source_cell]}")
 
             dependency_graph[work_id] = dependencies
 
+        logger.info(f"[解析流程图] 依赖关系图: {dependency_graph}")
+
         # 拓扑排序得到执行顺序
         work_order = self._topological_sort(dependency_graph)
+
+        logger.info(f"[解析流程图] 拓扑排序结果: {work_order}")
 
         return {
             "workOrder": work_order,
@@ -383,8 +422,12 @@ class JobWorkflowRunService:
             work_instances: Dict[int, JobWorkInstance],
             context: Dict[str, Any]
     ):
-        """异步执行作业流（后台任务）"""
+        """异步执行作业流(后台任务)"""
         from app.utils.database import async_session_maker
+
+        logger.info(f"[作业流执行] 开始执行作业流: {workflow_instance_id}")
+        logger.info(f"[作业流执行] 执行计划: {execution_plan}")
+        logger.info(f"[作业流执行] 作业实例数量: {len(work_instances)}")
 
         try:
             async with async_session_maker() as db:
@@ -392,50 +435,82 @@ class JobWorkflowRunService:
                 workflow_instance = await self._get_workflow_instance(
                     db, workflow_instance_id
                 )
+
+                if not workflow_instance:
+                    logger.error(f"[作业流执行] 找不到作业流实例: {workflow_instance_id}")
+                    return
+
                 workflow_instance.status = JobInstanceStatus.RUNNING
                 await db.commit()
+                logger.info(f"[作业流执行] 作业流状态已更新为RUNNING")
 
                 # 按照执行计划依次执行作业
                 work_order = execution_plan.get('workOrder', [])
+                logger.info(f"[作业流执行] 执行顺序: {work_order}")
 
-                for work_id in work_order:
+                for idx, work_id in enumerate(work_order, 1):
+                    logger.info(f"[作业流执行] 开始执行第 {idx}/{len(work_order)} 个作业, work_id={work_id}")
+
                     work_instance = work_instances.get(work_id)
                     if not work_instance:
+                        logger.warning(f"[作业流执行] 找不到work_id={work_id}的作业实例,跳过")
+                        continue
+
+                    # 重新从数据库查询work_instance,确保它在当前会话中
+                    result = await db.execute(
+                        select(JobWorkInstance).where(
+                            JobWorkInstance.instance_id == work_instance.instance_id
+                        )
+                    )
+                    work_instance = result.scalar_one_or_none()
+                    if not work_instance:
+                        logger.error(f"[作业流执行] 无法从数据库查询作业实例: {work_instance.instance_id}")
                         continue
 
                     # 检查作业流是否被中止
                     await db.refresh(workflow_instance)
                     if workflow_instance.status == JobInstanceStatus.ABORTING:
-                        logger.info(f"作业流已中止: {workflow_instance_id}")
+                        logger.info(f"[作业流执行] 作业流已中止: {workflow_instance_id}")
                         break
 
                     # 执行作业
+                    logger.info(f"[作业流执行] 执行作业: {work_instance.work_name} (ID: {work_instance.instance_id})")
                     await self._execute_work(db, work_instance, context)
 
-                    # 如果作业失败，根据策略决定是否继续
+                    # 刷新作业实例状态
                     await db.refresh(work_instance)
+                    logger.info(
+                        f"[作业流执行] 作业执行完成: {work_instance.work_name}, 状态={work_instance.status.value}")
+
+                    # 如果作业失败,根据策略决定是否继续
                     if work_instance.status == JobInstanceStatus.FAIL:
-                        logger.error(f"作业执行失败: {work_instance.work_name}")
+                        logger.error(
+                            f"[作业流执行] 作业执行失败: {work_instance.work_name}, 错误: {work_instance.error_message}")
                         # TODO: 根据失败策略决定是否继续
                         break
 
                 # 更新作业流最终状态
+                logger.info(f"[作业流执行] 所有作业执行完毕,更新作业流最终状态")
                 await self._update_workflow_final_status(db, workflow_instance_id)
 
+                logger.info(f"[作业流执行] 作业流执行完成: {workflow_instance_id}")
+
         except Exception as e:
-            logger.error(f"执行作业流失败: {e}")
+            logger.error(f"[作业流执行] 执行作业流失败: {e}", exc_info=True)
             # 更新失败状态
             try:
                 async with async_session_maker() as db:
                     workflow_instance = await self._get_workflow_instance(
                         db, workflow_instance_id
                     )
-                    workflow_instance.status = JobInstanceStatus.FAIL
-                    workflow_instance.end_datetime = datetime.now()
-                    workflow_instance.error_message = str(e)
-                    await db.commit()
-            except:
-                pass
+                    if workflow_instance:
+                        workflow_instance.status = JobInstanceStatus.FAIL
+                        workflow_instance.end_datetime = datetime.now()
+                        workflow_instance.error_message = str(e)
+                        await db.commit()
+                        logger.info(f"[作业流执行] 已更新作业流状态为FAIL")
+            except Exception as commit_error:
+                logger.error(f"[作业流执行] 更新失败状态时出错: {commit_error}")
 
     async def _execute_work(
             self,

@@ -3,10 +3,12 @@
 提供作业的增删改查、配置管理、运行控制等功能
 """
 from typing import Optional
-from fastapi import APIRouter, Depends, HTTPException, Query, Body
+from fastapi import APIRouter, Depends, HTTPException, Query, Body, BackgroundTasks
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from loguru import logger
 
+from app.models import JobWorkInstance
 from app.utils.database import get_async_db
 from app.utils.response import create_response
 from app.schemas.job_workflow import (
@@ -286,6 +288,7 @@ async def offline_work(
 @router.post("/run", summary="运行作业")
 async def run_work(
     data: JobWorkRun,
+    background_tasks: BackgroundTasks,
     db: AsyncSession = Depends(get_async_db)
 ):
     """运行单个作业（用于测试）"""
@@ -296,7 +299,8 @@ async def run_work(
             db=db,
             work_id=data.workId,
             trigger_user=None,  # TODO: 从认证中获取
-            context=data.context
+            context=data.context,
+            background_tasks=background_tasks
         )
 
         # ✅ 确保返回的是字符串ID，不是对象
@@ -376,34 +380,36 @@ async def get_work_instance_log(
     try:
         from app.services.job_work_run_service import job_work_run_service
 
-        # 获取完整的实例信息（包括状态）
-        instance_status = await job_work_run_service.get_work_instance_status(
-            db=db,
-            work_instance_id=work_instance_id
+        # 获取作业实例
+        result = await db.execute(
+            select(JobWorkInstance).where(JobWorkInstance.instance_id == work_instance_id)
         )
+        work_instance = result.scalar_one_or_none()
 
-        # 获取日志
-        result = await job_work_run_service.get_work_instance_log(
-            db=db,
-            work_instance_id=work_instance_id,
-            log_type=log_type
-        )
+        if not work_instance:
+            raise HTTPException(status_code=404, detail="作业实例不存在")
 
-        # ✅ 转换为前端期望的格式
-        logs = result.get("logs", {})
+        # 直接从数据库读取日志
+        response_data = {
+            "status": work_instance.status.value,
+            "submitLog": work_instance.submit_log or "",
+            "runningLog": work_instance.running_log or ""
+        }
+
+        # 根据 log_type 设置 log 字段(前端期望的字段名)
+        if log_type == "submit" or log_type == "all":
+            response_data["log"] = work_instance.submit_log or ""
+        elif log_type == "running":
+            response_data["log"] = work_instance.running_log or ""
+            # 运行日志前端期望的字段名是 yarnLog
+            response_data["yarnLog"] = work_instance.running_log or ""
 
         return create_response(
-            data={
-                "log": logs.get("submitLog", "") if log_type in ["submit", "all"] else logs.get("runningLog", ""),
-                "status": instance_status.get("status"),
-                "submitLog": logs.get("submitLog", ""),
-                "runningLog": logs.get("runningLog", ""),
-                "resultData": instance_status.get("resultData")
-            },
+            data=response_data,
             message="获取成功"
         )
-    except ValueError as e:
-        raise HTTPException(status_code=404, detail=str(e))
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"获取作业日志失败: {e}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -512,3 +518,27 @@ async def get_work_types():
         data={"workTypes": work_types},
         message="获取成功"
     )
+
+@router.get("/instance/{work_instance_id}/result", summary="获取作业实例结果")
+async def get_work_instance_result(
+        work_instance_id: str,
+        db: AsyncSession = Depends(get_async_db)
+):
+    """获取作业实例的执行结果"""
+    try:
+        from app.services.job_work_run_service import job_work_run_service
+
+        result = await job_work_run_service.get_work_instance_result(
+            db=db,
+            work_instance_id=work_instance_id
+        )
+
+        return create_response(
+            data=result,
+            message="获取成功"
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except Exception as e:
+        logger.error(f"获取作业实例结果失败: {e}")
+        raise HTTPException(status_code=500, detail=str(e))

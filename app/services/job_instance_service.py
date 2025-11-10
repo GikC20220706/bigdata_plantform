@@ -42,6 +42,10 @@ class JobInstanceService:
             if trigger_type:
                 conditions.append(JobWorkflowInstance.trigger_type == JobTriggerType(trigger_type))
 
+            # 过滤掉单独运行作业创建的临时工作流实例
+            conditions.append(~JobWorkflowInstance.workflow_instance_id.like('TEST_%'))
+            conditions.append(~JobWorkflowInstance.workflow_instance_id.like('WF_SINGLE_%'))
+
             # 查询总数
             count_query = select(func.count(JobWorkflowInstance.id))
             if conditions:
@@ -64,14 +68,23 @@ class JobInstanceService:
             # 转换为响应格式
             content = []
             for instance in instances:
+                # 计算耗时(秒)
+                duration = None
+                if instance.start_datetime and instance.end_datetime:
+                    duration = int((instance.end_datetime - instance.start_datetime).total_seconds())
+
                 content.append({
                     "workflowInstanceId": instance.workflow_instance_id,
                     "workflowId": instance.workflow_id,
                     "workflowName": instance.workflow_name,
                     "status": instance.status.value,
+                    "instanceType": instance.trigger_type.value,
                     "triggerType": instance.trigger_type.value,
+                    "execStartDateTime": instance.start_datetime.isoformat() if instance.start_datetime else None,
+                    "execEndDateTime": instance.end_datetime.isoformat() if instance.end_datetime else None,
                     "startDatetime": instance.start_datetime.isoformat() if instance.start_datetime else None,
                     "endDatetime": instance.end_datetime.isoformat() if instance.end_datetime else None,
+                    "duration": duration,
                     "lastModifiedBy": instance.last_modified_by,
                     "errorMessage": instance.error_message,
                     "createdAt": instance.created_at.isoformat() if instance.created_at else None
@@ -101,6 +114,8 @@ class JobInstanceService:
     ) -> Dict[str, Any]:
         """分页查询作业实例列表"""
         try:
+            from sqlalchemy.orm import joinedload
+
             # 构建查询条件
             conditions = []
 
@@ -121,8 +136,10 @@ class JobInstanceService:
             count_result = await db.execute(count_query)
             total = count_result.scalar()
 
-            # 查询数据
-            query = select(JobWorkInstance)
+            # 查询数据 - 关联加载工作流实例以获取触发类型
+            query = select(JobWorkInstance).options(
+                joinedload(JobWorkInstance.workflow_instance)
+            )
             if conditions:
                 query = query.where(and_(*conditions))
 
@@ -130,11 +147,21 @@ class JobInstanceService:
             query = query.offset(page * page_size).limit(page_size)
 
             result = await db.execute(query)
-            instances = result.scalars().all()
+            instances = result.scalars().unique().all()
 
             # 转换为响应格式
             content = []
             for instance in instances:
+                # 计算耗时(秒)
+                duration = None
+                if instance.start_datetime and instance.end_datetime:
+                    duration = int((instance.end_datetime - instance.start_datetime).total_seconds())
+
+                # 从关联的工作流实例获取触发类型
+                instance_type = "MANUAL"  # 默认值
+                if instance.workflow_instance:
+                    instance_type = instance.workflow_instance.trigger_type.value
+
                 content.append({
                     "instanceId": instance.instance_id,
                     "workflowInstanceId": instance.workflow_instance_id,
@@ -142,8 +169,12 @@ class JobInstanceService:
                     "workName": instance.work_name,
                     "workType": instance.work_type,
                     "status": instance.status.value,
+                    "instanceType": instance_type,  # 添加触发类型
+                    "execStartDateTime": instance.start_datetime.isoformat() if instance.start_datetime else None,
+                    "execEndDateTime": instance.end_datetime.isoformat() if instance.end_datetime else None,
                     "startDatetime": instance.start_datetime.isoformat() if instance.start_datetime else None,
                     "endDatetime": instance.end_datetime.isoformat() if instance.end_datetime else None,
+                    "duration": duration,  # 添加耗时
                     "errorMessage": instance.error_message,
                     "createdAt": instance.created_at.isoformat() if instance.created_at else None
                 })

@@ -26,7 +26,8 @@ class JobWorkRunService:
             db: AsyncSession,
             work_id: int,
             trigger_user: Optional[str] = None,
-            context: Optional[Dict[str, Any]] = None
+            context: Optional[Dict[str, Any]] = None,
+            background_tasks=None
     ) -> Dict[str, Any]:
         """
         单独运行作业（用于测试）
@@ -43,7 +44,7 @@ class JobWorkRunService:
                 raise ValueError(f"作业流不存在")
 
             # 3. 创建临时作业流实例（用于单独测试作业）
-            workflow_instance_id = f"TEST_{uuid.uuid4().hex[:16].upper()}"
+            workflow_instance_id = f"WF_SINGLE_{uuid.uuid4().hex[:16].upper()}"
 
             workflow_instance = JobWorkflowInstance(
                 workflow_instance_id=workflow_instance_id,
@@ -74,19 +75,21 @@ class JobWorkRunService:
             await db.commit()
             await db.refresh(work_instance)
 
-            # 5. 异步执行作业
-            asyncio.create_task(
-                self._execute_work_async(
+            # 5. 使用BackgroundTasks而不是asyncio.create_task
+            if background_tasks:
+                background_tasks.add_task(
+                    self._execute_work_async,
                     work_instance_id,
                     work,
                     context or {}
                 )
-            )
-
-            logger.info(
-                f"作业已提交运行: {work.name} "
-                f"(实例ID: {work_instance_id})"
-            )
+            else:
+                # 如果没有background_tasks,就同步执行
+                await self._execute_work_async(
+                    work_instance_id,
+                    work,
+                    context or {}
+                )
 
             return {
                 "workInstanceId": work_instance_id,
@@ -192,23 +195,47 @@ class JobWorkRunService:
             if not work_instance:
                 raise ValueError(f"作业实例不存在: {work_instance_id}")
 
-            logs = {}
+            result = {
+                "instanceId": work_instance_id,
+                "status": work_instance.status.value
+            }
 
-            if log_type in ["submit", "all"]:
-                logs["submitLog"] = work_instance.submit_log or ""
+            if log_type == "submit" or log_type == "all":
+                # 前端期望的字段名是 log
+                result["log"] = work_instance.submit_log or ""
+                result["submitLog"] = work_instance.submit_log or ""
 
-            if log_type in ["running", "all"]:
-                logs["runningLog"] = work_instance.running_log or ""
+            if log_type == "running":
+                # 运行日志前端期望的字段名是 yarnLog
+                result["yarnLog"] = work_instance.running_log or ""
+                result["runningLog"] = work_instance.running_log or ""
+
+            return result
+
+        except Exception as e:
+            logger.error(f"获取作业实例日志失败: {e}")
+            raise
+
+    async def get_work_instance_result(
+            self,
+            db: AsyncSession,
+            work_instance_id: str
+    ) -> Dict[str, Any]:
+        """获取作业实例结果"""
+        try:
+            work_instance = await self._get_work_instance(db, work_instance_id)
+            if not work_instance:
+                raise ValueError(f"作业实例不存在: {work_instance_id}")
 
             return {
-                "workInstanceId": work_instance_id,
-                "logs": logs
+                "instanceId": work_instance_id,
+                "status": work_instance.status.value,
+                "resultData": work_instance.result_data or {}
             }
 
         except Exception as e:
-            logger.error(f"获取作业日志失败: {e}")
+            logger.error(f"获取作业实例结果失败: {e}")
             raise
-
     # ==================== 私有方法 ====================
 
     async def _get_work(
