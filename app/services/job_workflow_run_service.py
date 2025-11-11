@@ -543,12 +543,23 @@ class JobWorkflowRunService:
             )
 
             # 更新执行结果
+            # 更新执行结果(保留之前保存的日志)
             if result.get('success'):
                 work_instance.status = JobInstanceStatus.SUCCESS
                 work_instance.result_data = result.get('data')
+                # 如果submit_log为空,添加简单的成功日志
+                if not work_instance.submit_log:
+                    work_instance.submit_log = f"{datetime.now().strftime('%Y-%m-%d %H:%M:%S.%f')[:-3]} INFO : 执行成功"
+                if not work_instance.running_log:
+                    work_instance.running_log = "执行成功"
             else:
                 work_instance.status = JobInstanceStatus.FAIL
                 work_instance.error_message = result.get('error')
+                # 如果submit_log为空,添加错误日志
+                if not work_instance.submit_log:
+                    work_instance.submit_log = f"{datetime.now().strftime('%Y-%m-%d %H:%M:%S.%f')[:-3]} ERROR : {result.get('error')}"
+                if not work_instance.running_log:
+                    work_instance.running_log = f"执行失败: {result.get('error')}"
 
             work_instance.end_datetime = datetime.now()
             await db.commit()

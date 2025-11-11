@@ -542,3 +542,61 @@ async def get_work_instance_result(
     except Exception as e:
         logger.error(f"获取作业实例结果失败: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/instance/{work_instance_id}/rerun", summary="重跑作业实例")
+async def rerun_work_instance(
+        work_instance_id: str,
+        background_tasks: BackgroundTasks,
+        db: AsyncSession = Depends(get_async_db)
+):
+    """基于作业实例重新运行作业"""
+    try:
+        from app.services.job_work_run_service import job_work_run_service
+
+        # 获取原作业实例
+        result = await db.execute(
+            select(JobWorkInstance).where(
+                JobWorkInstance.instance_id == work_instance_id
+            )
+        )
+        work_instance = result.scalar_one_or_none()
+
+        if not work_instance:
+            raise HTTPException(
+                status_code=404,
+                detail=f"作业实例不存在: {work_instance_id}"
+            )
+
+        # 使用原作业的work_id重新运行
+        new_result = await job_work_run_service.run_single_work(
+            db=db,
+            work_id=work_instance.work_id,
+            trigger_user=None,
+            context={},
+            background_tasks=background_tasks
+        )
+
+        logger.info(
+            f"重跑作业: 原实例={work_instance_id}, "
+            f"新实例={new_result['workInstanceId']}"
+        )
+
+        return create_response(
+            data={
+                "originalInstanceId": work_instance_id,
+                "newInstanceId": new_result["workInstanceId"],
+                "workflowInstanceId": new_result.get("workflowInstanceId"),
+                "status": new_result["status"],
+                "message": "作业已重新提交运行"
+            },
+            message="作业已重新提交运行"
+        )
+
+    except HTTPException:
+        raise
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        logger.error(f"重跑作业失败: {e}")
+        raise HTTPException(status_code=500, detail=str(e))

@@ -146,11 +146,11 @@ class JDBCExecutorEnhanced(JobExecutor):
         super().__init__("jdbc_executor_enhanced")
 
     async def execute(
-        self,
-        db: AsyncSession,
-        work_config: Dict[str, Any],
-        instance_id: str,
-        context: Optional[Dict[str, Any]] = None
+            self,
+            db: AsyncSession,
+            work_config: Dict[str, Any],
+            instance_id: str,
+            context: Optional[Dict[str, Any]] = None
     ) -> Dict[str, Any]:
         """执行SQL"""
         try:
@@ -158,9 +158,10 @@ class JDBCExecutorEnhanced(JobExecutor):
             sql = work_config.get('sql')
             sql_type = work_config.get('type', 'query')  # query, execute
             timeout = work_config.get('timeout', 300)
-            use_transaction = work_config.get('useTransaction', False)  # 是否使用事务
-            params = work_config.get('params', {})  # SQL参数
+            use_transaction = work_config.get('useTransaction', False)
+            params = work_config.get('params', {})
 
+            # 参数验证
             if not datasource_id:
                 return {
                     "success": False,
@@ -192,7 +193,7 @@ class JDBCExecutorEnhanced(JobExecutor):
                 sql = self._replace_variables(sql, context)
                 params = self._replace_dict_variables(params, context)
 
-            # 获取数据库引擎（带连接池）
+            # 获取数据库引擎(带连接池)
             engine = await connection_pool_manager.get_engine(
                 datasource_id, datasource_config
             )
@@ -210,12 +211,18 @@ class JDBCExecutorEnhanced(JobExecutor):
             return result
 
         except Exception as e:
-            logger.error(f"JDBC执行失败: {e}")
+            # ✅ 顶层异常也要正确处理
+            error_str = str(e)
+            error_type = type(e).__name__
+
+            logger.error(f"JDBC执行失败: {error_str}", exc_info=True)
+
             return {
                 "success": False,
                 "message": "执行失败",
                 "data": None,
-                "error": str(e)
+                "error": error_str,
+                "error_type": error_type
             }
 
     async def _execute_query(
@@ -226,60 +233,51 @@ class JDBCExecutorEnhanced(JobExecutor):
             timeout: int
     ) -> Dict[str, Any]:
         """执行查询"""
-        from datetime import date, datetime
-        from decimal import Decimal
-
         try:
             start_time = datetime.now()
 
             async with engine.connect() as conn:
-                # 执行查询
                 result = await conn.execute(text(sql), params)
+                rows = [dict(row._mapping) for row in result.fetchall()]
 
-                # 获取列名
-                columns = list(result.keys())
+            elapsed = (datetime.now() - start_time).total_seconds()
 
-                # ✅ 获取数据并转换为JSON可序列化的格式
-                rows = []
-                for row in result:
-                    row_dict = {}
-                    for col, value in zip(columns, row):
-                        # ✅ 处理特殊类型
-                        if isinstance(value, datetime):
-                            row_dict[col] = value.strftime('%Y-%m-%d %H:%M:%S')
-                        elif isinstance(value, date):
-                            row_dict[col] = value.strftime('%Y-%m-%d')
-                        elif isinstance(value, Decimal):
-                            row_dict[col] = float(value)
-                        elif isinstance(value, bytes):
-                            row_dict[col] = value.decode('utf-8', errors='ignore')
-                        elif value is None:
-                            row_dict[col] = None
-                        else:
-                            row_dict[col] = value
-                    rows.append(row_dict)
-
-                elapsed = (datetime.now() - start_time).total_seconds()
-
-                return {
-                    "success": True,
-                    "message": f"查询成功，返回 {len(rows)} 行",
-                    "data": {
-                        "columns": columns,
-                        "rows": rows,
-                        "rowCount": len(rows),
-                        "elapsed": round(elapsed, 3)
-                    },
-                    "error": None
-                }
+            return {
+                "success": True,
+                "message": "查询成功",
+                "data": {
+                    "rows": rows,
+                    "rowCount": len(rows),
+                    "elapsed": round(elapsed, 3)
+                },
+                "error": None
+            }
 
         except Exception as e:
-            logger.error(f"SQL查询失败: {e}")
+            # ✅ 确保查询失败也返回正确的状态
+            error_str = str(e)
+            error_type = type(e).__name__
+
+            # 提供友好的错误消息
+            if "syntax error" in error_str.lower():
+                message = "SQL语法错误"
+            elif "table" in error_str.lower() and "doesn't exist" in error_str.lower():
+                message = "表不存在"
+            elif "column" in error_str.lower() and "doesn't exist" in error_str.lower():
+                message = "列不存在"
+            elif "connection" in error_str.lower():
+                message = "数据库连接失败"
+            else:
+                message = "查询失败"
+
+            logger.error(f"{message}: {error_str}")
+
             return {
                 "success": False,
-                "message": "查询失败",
+                "message": message,
                 "data": None,
-                "error": str(e)
+                "error": error_str,
+                "error_type": error_type
             }
 
     async def _execute_update(
@@ -290,7 +288,7 @@ class JDBCExecutorEnhanced(JobExecutor):
             timeout: int,
             use_transaction: bool
     ) -> Dict[str, Any]:
-        """执行更新（INSERT/UPDATE/DELETE）- 支持多条SQL语句"""
+        """执行更新(INSERT/UPDATE/DELETE) - 支持多条SQL语句"""
         try:
             start_time = datetime.now()
 
@@ -307,28 +305,33 @@ class JDBCExecutorEnhanced(JobExecutor):
 
             total_affected_rows = 0
             executed_count = 0
+            failed_statement = None
 
             if use_transaction:
                 # 使用事务执行多条语句
                 async with engine.begin() as conn:
-                    for stmt in sql_statements:
+                    for i, stmt in enumerate(sql_statements):
+                        failed_statement = stmt
                         result = await conn.execute(text(stmt), params)
                         total_affected_rows += result.rowcount
                         executed_count += 1
+                        failed_statement = None
             else:
                 # 不使用事务,逐条执行
                 async with engine.connect() as conn:
-                    for stmt in sql_statements:
+                    for i, stmt in enumerate(sql_statements):
+                        failed_statement = stmt
                         result = await conn.execute(text(stmt), params)
                         await conn.commit()
                         total_affected_rows += result.rowcount
                         executed_count += 1
+                        failed_statement = None
 
             elapsed = (datetime.now() - start_time).total_seconds()
 
             return {
                 "success": True,
-                "message": f"执行成功，共执行 {executed_count} 条语句，影响 {total_affected_rows} 行",
+                "message": f"执行成功,共执行 {executed_count} 条语句,影响 {total_affected_rows} 行",
                 "data": {
                     "affectedRows": total_affected_rows,
                     "executedStatements": executed_count,
@@ -338,12 +341,42 @@ class JDBCExecutorEnhanced(JobExecutor):
             }
 
         except Exception as e:
-            logger.error(f"SQL执行失败: {e}")
+            # ✅ 关键修复: 正确返回失败状态
+            error_str = str(e)
+            error_type = type(e).__name__
+
+            # 提供友好的错误消息
+            if "already exists" in error_str.lower():
+                message = "数据库对象已存在"
+            elif "access denied" in error_str.lower() or "permission" in error_str.lower():
+                message = "权限不足"
+            elif "syntax error" in error_str.lower():
+                message = "SQL语法错误"
+            elif "connection" in error_str.lower():
+                message = "数据库连接失败"
+            elif "duplicate" in error_str.lower():
+                message = "数据重复"
+            else:
+                message = "SQL执行失败"
+
+            # 如果是多条SQL,指出哪条失败了
+            if len(sql_statements) > 1 and failed_statement:
+                message = f"{message}(第{executed_count + 1}/{len(sql_statements)}条)"
+                logger.error(f"{message}: {error_str}")
+                logger.error(f"失败的SQL: {failed_statement}")
+            else:
+                logger.error(f"{message}: {error_str}")
+
             return {
                 "success": False,
-                "message": "执行失败",
-                "data": None,
-                "error": str(e)
+                "message": message,
+                "data": {
+                    "executedStatements": executed_count,
+                    "totalStatements": len(sql_statements),
+                    "failedStatement": failed_statement if failed_statement else None
+                },
+                "error": error_str,
+                "error_type": error_type
             }
 
     async def _get_datasource_config(

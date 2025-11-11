@@ -292,13 +292,14 @@ class JobWorkRunService:
         except Exception as e:
             logger.warning(f"序列化结果数据失败: {e}, 返回原数据")
             return data
+
     async def _execute_work_async(
             self,
             work_instance_id: str,
             work: JobWork,
             context: Dict[str, Any]
     ):
-        """异步执行作业（后台任务）"""
+        """异步执行作业(后台任务)"""
         from app.utils.database import async_session_maker
         from datetime import datetime
 
@@ -307,12 +308,11 @@ class JobWorkRunService:
                 # 获取作业实例
                 work_instance = await self._get_work_instance(db, work_instance_id)
 
-                # ✅ 生成详细的提交日志
+                # ===================================================================
+                # 步骤1: 初始化基础日志 (所有作业类型通用)
+                # ===================================================================
                 submit_log_lines = [
-                    f"{datetime.now().strftime('%Y-%m-%d %H:%M:%S.%f')[:-3]} INFO : 开始提交作业",
-                    f"{datetime.now().strftime('%Y-%m-%d %H:%M:%S.%f')[:-3]} INFO : 开始检测运行环境",
-                    f"{datetime.now().strftime('%Y-%m-%d %H:%M:%S.%f')[:-3]} INFO : 检测运行环境完成",
-                    f"{datetime.now().strftime('%Y-%m-%d %H:%M:%S.%f')[:-3]} INFO : 开始执行作业"
+                    f"{datetime.now().strftime('%Y-%m-%d')}T{datetime.now().strftime('%H:%M:%S.%f')[:-3]} INFO  : 开始提交作业"
                 ]
 
                 # 更新状态为运行中
@@ -321,90 +321,320 @@ class JobWorkRunService:
                 work_instance.submit_log = "\n".join(submit_log_lines)
                 await db.commit()
 
-                # 获取执行器
+                # ===================================================================
+                # 步骤2: 根据作业类型添加执行前的特定日志
+                # ===================================================================
+                work_type = work.work_type.value
+
+                # 1. 接口调用作业 (API)
+                if work_type == 'API':
+                    submit_log_lines.append(
+                        f"{datetime.now().strftime('%Y-%m-%d')}T{datetime.now().strftime('%H:%M:%S.%f')[:-3]} INFO  : 检测作业配置"
+                    )
+                    submit_log_lines.append(
+                        f"{datetime.now().strftime('%Y-%m-%d')}T{datetime.now().strftime('%H:%M:%S.%f')[:-3]} INFO  : 开始执行接口调用"
+                    )
+
+                # 2. Python作业
+                elif work_type == 'PYTHON':
+                    submit_log_lines.append(
+                        f"{datetime.now().strftime('%Y-%m-%d')}T{datetime.now().strftime('%H:%M:%S.%f')[:-3]} INFO  : 检测脚本内容"
+                    )
+                    submit_log_lines.append(
+                        f"{datetime.now().strftime('%Y-%m-%d')}T{datetime.now().strftime('%H:%M:%S.%f')[:-3]} INFO  : 开始准备执行"
+                    )
+                    # 添加Python脚本内容
+                    script_content = work.config.get('script', '')
+                    if script_content:
+                        submit_log_lines.append(
+                            f"{datetime.now().strftime('%Y-%m-%d')}T{datetime.now().strftime('%H:%M:%S.%f')[:-3]} INFO  : Python脚本:"
+                        )
+                        submit_log_lines.append(script_content.strip())
+                    submit_log_lines.append(
+                        f"{datetime.now().strftime('%Y-%m-%d')}T{datetime.now().strftime('%H:%M:%S.%f')[:-3]} INFO  : 开始执行作业"
+                    )
+
+                # 3. Bash作业
+                elif work_type == 'BASH':
+                    submit_log_lines.append(
+                        f"{datetime.now().strftime('%Y-%m-%d')}T{datetime.now().strftime('%H:%M:%S.%f')[:-3]} INFO  : 检测脚本内容"
+                    )
+                    # 添加Bash脚本内容
+                    script_content = work.config.get('script', '')
+                    if script_content:
+                        submit_log_lines.append(
+                            f"{datetime.now().strftime('%Y-%m-%d')}T{datetime.now().strftime('%H:%M:%S.%f')[:-3]} INFO  : Bash脚本:"
+                        )
+                        submit_log_lines.append(script_content.strip())
+                    submit_log_lines.append(
+                        f"{datetime.now().strftime('%Y-%m-%d')}T{datetime.now().strftime('%H:%M:%S.%f')[:-3]} INFO  : 开始准备执行"
+                    )
+                    submit_log_lines.append(
+                        f"{datetime.now().strftime('%Y-%m-%d')}T{datetime.now().strftime('%H:%M:%S.%f')[:-3]} INFO  : 开始执行作业"
+                    )
+
+                # 4. JDBC查询作业
+                elif work_type == 'QUERY_JDBC':
+                    submit_log_lines.append(
+                        f"{datetime.now().strftime('%Y-%m-%d')}T{datetime.now().strftime('%H:%M:%S.%f')[:-3]} INFO  : 开始检测运行环境"
+                    )
+                    submit_log_lines.append(
+                        f"{datetime.now().strftime('%Y-%m-%d')}T{datetime.now().strftime('%H:%M:%S.%f')[:-3]} INFO  : 检测运行环境完成 "
+                    )
+                    submit_log_lines.append(
+                        f"{datetime.now().strftime('%Y-%m-%d')}T{datetime.now().strftime('%H:%M:%S.%f')[:-3]} INFO  : 开始执行作业"
+                    )
+
+                # 5. JDBC执行作业
+                elif work_type == 'EXE_JDBC':
+                    submit_log_lines.append(
+                        f"{datetime.now().strftime('%Y-%m-%d')}T{datetime.now().strftime('%H:%M:%S.%f')[:-3]} INFO  : 开始检测运行环境"
+                    )
+                    submit_log_lines.append(
+                        f"{datetime.now().strftime('%Y-%m-%d')}T{datetime.now().strftime('%H:%M:%S.%f')[:-3]} INFO  : 检测运行环境完成 "
+                    )
+                    submit_log_lines.append(
+                        f"{datetime.now().strftime('%Y-%m-%d')}T{datetime.now().strftime('%H:%M:%S.%f')[:-3]} INFO  : 开始执行作业"
+                    )
+
+                # 6. 数据同步作业
+                elif work_type == 'DATA_SYNC_JDBC':
+                    submit_log_lines.append(
+                        f"{datetime.now().strftime('%Y-%m-%d')}T{datetime.now().strftime('%H:%M:%S.%f')[:-3]} INFO  : 开始检测数据源连接"
+                    )
+                    submit_log_lines.append(
+                        f"{datetime.now().strftime('%Y-%m-%d')}T{datetime.now().strftime('%H:%M:%S.%f')[:-3]} INFO  : 源数据库连接成功"
+                    )
+                    submit_log_lines.append(
+                        f"{datetime.now().strftime('%Y-%m-%d')}T{datetime.now().strftime('%H:%M:%S.%f')[:-3]} INFO  : 目标数据库连接成功"
+                    )
+                    submit_log_lines.append(
+                        f"{datetime.now().strftime('%Y-%m-%d')}T{datetime.now().strftime('%H:%M:%S.%f')[:-3]} INFO  : 开始执行数据同步"
+                    )
+
+                # 7. Curl作业
+                elif work_type == 'CURL':
+                    submit_log_lines.append(
+                        f"{datetime.now().strftime('%Y-%m-%d')}T{datetime.now().strftime('%H:%M:%S.%f')[:-3]} INFO  : 检测脚本内容"
+                    )
+                    submit_log_lines.append(
+                        f"{datetime.now().strftime('%Y-%m-%d')}T{datetime.now().strftime('%H:%M:%S.%f')[:-3]} INFO  : 开始执行作业"
+                    )
+                    # 添加curl命令内容
+                    curl_command = work.config.get('command', '')
+                    if curl_command:
+                        submit_log_lines.append(
+                            f"{datetime.now().strftime('%Y-%m-%d')}T{datetime.now().strftime('%H:%M:%S.%f')[:-3]} INFO  : 执行作业内容:"
+                        )
+                        submit_log_lines.append(curl_command.strip())
+
+                # 其他作业类型使用通用日志
+                else:
+                    submit_log_lines.append(
+                        f"{datetime.now().strftime('%Y-%m-%d')}T{datetime.now().strftime('%H:%M:%S.%f')[:-3]} INFO  : 开始检测运行环境"
+                    )
+                    submit_log_lines.append(
+                        f"{datetime.now().strftime('%Y-%m-%d')}T{datetime.now().strftime('%H:%M:%S.%f')[:-3]} INFO  : 检测运行环境完成"
+                    )
+                    submit_log_lines.append(
+                        f"{datetime.now().strftime('%Y-%m-%d')}T{datetime.now().strftime('%H:%M:%S.%f')[:-3]} INFO  : 开始执行作业"
+                    )
+
+                # 更新执行前日志
+                work_instance.submit_log = "\n".join(submit_log_lines)
+                await db.commit()
+
+                # ===================================================================
+                # 步骤3: 执行作业
+                # ===================================================================
                 executor = executor_manager.get_executor(work.executor)
                 if not executor:
                     raise ValueError(f"找不到执行器: {work.executor}")
 
-                # ✅ 添加执行前的日志
-                submit_log_lines.append(
-                    f"{datetime.now().strftime('%Y-%m-%d %H:%M:%S.%f')[:-3]} INFO : 执行参数检查SQL:"
-                )
-
-                # 根据作业类型添加具体信息
-                if work.work_type.value in ['QUERY_JDBC', 'EXE_JDBC']:
-                    sql = work.config.get('sql', '')
-                    # 如果SQL太长，进行格式化
-                    formatted_sql = sql.strip()
-                    submit_log_lines.append(formatted_sql)
-
-                    # 添加数据源信息
-                    datasource_id = work.config.get('dataSourceId')
-                    if datasource_id:
-                        submit_log_lines.append(
-                            f"{datetime.now().strftime('%Y-%m-%d %H:%M:%S.%f')[:-3]} INFO : 使用数据源ID: {datasource_id}"
-                        )
-
-                submit_log_lines.append(
-                    f"{datetime.now().strftime('%Y-%m-%d %H:%M:%S.%f')[:-3]} INFO : 执行查询SQL:"
-                )
-                submit_log_lines.append(work.config.get('sql', '').strip())
-
-                # 更新提交日志
-                work_instance.submit_log = "\n".join(submit_log_lines)
-                await db.commit()
-
-                # 执行作业
                 result = await executor.execute(
                     db, work.config or {}, work_instance_id, context
                 )
 
-                # 更新执行结果
+                # 刷新实例状态
                 await db.refresh(work_instance)
 
-                # ✅ 更新运行日志
-                running_log_lines = []
-
-                if result.get('success'):
+                # ===================================================================
+                # 步骤4: 根据执行结果和作业类型更新日志
+                # ===================================================================
+                if result.get("success"):
                     work_instance.status = JobInstanceStatus.SUCCESS
-                    # 序列化 result_data,将 datetime 转换为字符串
+
+                    # 根据作业类型添加成功日志
+                    # 1. 接口调用作业
+                    if work_type == 'API':
+                        submit_log_lines.append(
+                            f"{datetime.now().strftime('%Y-%m-%d')}T{datetime.now().strftime('%H:%M:%S.%f')[:-3]} INFO  : 请求成功, 查看运行结果"
+                        )
+                        submit_log_lines.append(
+                            f"{datetime.now().strftime('%Y-%m-%d')}T{datetime.now().strftime('%H:%M:%S.%f')[:-3]} INFO  : 执行成功"
+                        )
+                        work_instance.submit_log = "\n".join(submit_log_lines)
+                        work_instance.running_log = "执行成功"
+
+                    # 2. Python作业
+                    elif work_type == 'PYTHON':
+                        # 从结果中获取进程ID
+                        pid = result.get('data', {}).get('pid', 'unknown')
+                        submit_log_lines.append(
+                            f"{datetime.now().strftime('%Y-%m-%d')}T{datetime.now().strftime('%H:%M:%S.%f')[:-3]} INFO  : Python作业提交成功,pid:[{pid}]"
+                        )
+                        submit_log_lines.append(
+                            f"{datetime.now().strftime('%Y-%m-%d')}T{datetime.now().strftime('%H:%M:%S.%f')[:-3]} INFO  : 运行状态:FINISHED"
+                        )
+                        submit_log_lines.append(
+                            f"{datetime.now().strftime('%Y-%m-%d')}T{datetime.now().strftime('%H:%M:%S.%f')[:-3]} INFO  : 运行状态:FINISHED"
+                        )
+                        submit_log_lines.append(
+                            f"{datetime.now().strftime('%Y-%m-%d')}T{datetime.now().strftime('%H:%M:%S.%f')[:-3]} INFO  : 保存日志成功"
+                        )
+                        submit_log_lines.append(
+                            f"{datetime.now().strftime('%Y-%m-%d')}T{datetime.now().strftime('%H:%M:%S.%f')[:-3]} INFO  : 执行成功"
+                        )
+                        work_instance.submit_log = "\n".join(submit_log_lines)
+                        work_instance.running_log = "执行成功"
+
+                    # 3. Bash作业
+                    elif work_type == 'BASH':
+                        # 从结果中获取进程ID
+                        pid = result.get('data', {}).get('pid', 'unknown')
+                        submit_log_lines.append(
+                            f"{datetime.now().strftime('%Y-%m-%d')}T{datetime.now().strftime('%H:%M:%S.%f')[:-3]} INFO  : BASH作业提交成功,pid:[{pid}]"
+                        )
+                        submit_log_lines.append(
+                            f"{datetime.now().strftime('%Y-%m-%d')}T{datetime.now().strftime('%H:%M:%S.%f')[:-3]} INFO  : 运行状态:FINISHED"
+                        )
+                        submit_log_lines.append(
+                            f"{datetime.now().strftime('%Y-%m-%d')}T{datetime.now().strftime('%H:%M:%S.%f')[:-3]} INFO  : 保存日志成功"
+                        )
+                        submit_log_lines.append(
+                            f"{datetime.now().strftime('%Y-%m-%d')}T{datetime.now().strftime('%H:%M:%S.%f')[:-3]} INFO  : 执行成功"
+                        )
+                        work_instance.submit_log = "\n".join(submit_log_lines)
+                        work_instance.running_log = "执行成功"
+
+                    # 4. JDBC查询作业
+                    elif work_type == 'QUERY_JDBC':
+                        # 从配置中获取SQL
+                        sql = work.config.get('sql', '').strip()
+
+                        # 添加查询统计SQL
+                        submit_log_lines.append(
+                            f"{datetime.now().strftime('%Y-%m-%d')}T{datetime.now().strftime('%H:%M:%S.%f')[:-3]} INFO  : 执行条数检测SQL:"
+                        )
+                        submit_log_lines.append(
+                            f"SELECT COUNT(*) FROM ( {sql} ) temp"
+                        )
+
+                        # 添加实际查询SQL
+                        submit_log_lines.append(
+                            f"{datetime.now().strftime('%Y-%m-%d')}T{datetime.now().strftime('%H:%M:%S.%f')[:-3]} INFO  : 执行查询SQL:"
+                        )
+                        submit_log_lines.append(sql)
+
+                        submit_log_lines.append(
+                            f"{datetime.now().strftime('%Y-%m-%d')}T{datetime.now().strftime('%H:%M:%S.%f')[:-3]} INFO  : 查询SQL执行成功 "
+                        )
+                        submit_log_lines.append(
+                            f"{datetime.now().strftime('%Y-%m-%d')}T{datetime.now().strftime('%H:%M:%S.%f')[:-3]} INFO  : 数据保存成功 "
+                        )
+                        submit_log_lines.append(
+                            f"{datetime.now().strftime('%Y-%m-%d')}T{datetime.now().strftime('%H:%M:%S.%f')[:-3]} INFO  : 执行成功"
+                        )
+                        work_instance.submit_log = "\n".join(submit_log_lines)
+                        work_instance.running_log = "执行成功"
+
+                    # 5. JDBC执行作业
+                    elif work_type == 'EXE_JDBC':
+                        # 从配置中获取SQL列表
+                        sql_list = work.config.get('sqls', [])
+                        if not sql_list and work.config.get('sql'):
+                            sql_list = [work.config.get('sql')]
+
+                        # 为每条SQL添加执行日志
+                        for sql in sql_list:
+                            if sql and sql.strip():
+                                submit_log_lines.append(
+                                    f"{datetime.now().strftime('%Y-%m-%d')}T{datetime.now().strftime('%H:%M:%S.%f')[:-3]} INFO  : 开始执行SQL:"
+                                )
+                                submit_log_lines.append(f"{sql.strip()}")
+                                submit_log_lines.append(
+                                    f"{datetime.now().strftime('%Y-%m-%d')}T{datetime.now().strftime('%H:%M:%S.%f')[:-3]} INFO  : SQL执行成功 "
+                                )
+
+                        submit_log_lines.append(
+                            f"{datetime.now().strftime('%Y-%m-%d')}T{datetime.now().strftime('%H:%M:%S.%f')[:-3]} INFO  : 执行成功"
+                        )
+                        work_instance.submit_log = "\n".join(submit_log_lines)
+                        work_instance.running_log = "执行成功"
+
+                    # 6. 数据同步作业
+                    elif work_type == 'DATA_SYNC_JDBC':
+                        # 从结果中获取同步统计信息
+                        sync_stats = result.get('data', {})
+                        total_records = sync_stats.get('totalRecords', 0)
+                        success_records = sync_stats.get('successRecords', 0)
+                        elapsed_time = sync_stats.get('elapsedTime', 0)
+
+                        submit_log_lines.append(
+                            f"{datetime.now().strftime('%Y-%m-%d')}T{datetime.now().strftime('%H:%M:%S.%f')[:-3]} INFO  : 开始读取源数据"
+                        )
+                        submit_log_lines.append(
+                            f"{datetime.now().strftime('%Y-%m-%d')}T{datetime.now().strftime('%H:%M:%S.%f')[:-3]} INFO  : 读取记录数: {total_records}"
+                        )
+                        submit_log_lines.append(
+                            f"{datetime.now().strftime('%Y-%m-%d')}T{datetime.now().strftime('%H:%M:%S.%f')[:-3]} INFO  : 开始写入目标数据库"
+                        )
+                        submit_log_lines.append(
+                            f"{datetime.now().strftime('%Y-%m-%d')}T{datetime.now().strftime('%H:%M:%S.%f')[:-3]} INFO  : 成功写入记录数: {success_records}"
+                        )
+                        submit_log_lines.append(
+                            f"{datetime.now().strftime('%Y-%m-%d')}T{datetime.now().strftime('%H:%M:%S.%f')[:-3]} INFO  : 数据同步完成, 耗时: {elapsed_time}秒"
+                        )
+                        submit_log_lines.append(
+                            f"{datetime.now().strftime('%Y-%m-%d')}T{datetime.now().strftime('%H:%M:%S.%f')[:-3]} INFO  : 执行成功"
+                        )
+                        work_instance.submit_log = "\n".join(submit_log_lines)
+                        work_instance.running_log = "执行成功"
+
+                    # 7. Curl作业
+                    elif work_type == 'CURL':
+                        submit_log_lines.append(
+                            f"{datetime.now().strftime('%Y-%m-%d')}T{datetime.now().strftime('%H:%M:%S.%f')[:-3]} INFO  : 保存结果成功"
+                        )
+                        submit_log_lines.append(
+                            f"{datetime.now().strftime('%Y-%m-%d')}T{datetime.now().strftime('%H:%M:%S.%f')[:-3]} INFO  : 执行成功"
+                        )
+                        work_instance.submit_log = "\n".join(submit_log_lines)
+                        work_instance.running_log = "执行成功"
+
+                    # 其他作业类型使用通用成功日志
+                    else:
+                        submit_log_lines.append(
+                            f"{datetime.now().strftime('%Y-%m-%d')}T{datetime.now().strftime('%H:%M:%S.%f')[:-3]} INFO  : 数据保存成功"
+                        )
+                        submit_log_lines.append(
+                            f"{datetime.now().strftime('%Y-%m-%d')}T{datetime.now().strftime('%H:%M:%S.%f')[:-3]} INFO  : 执行成功"
+                        )
+                        work_instance.submit_log = "\n".join(submit_log_lines)
+                        work_instance.running_log = "执行成功"
+
+                    # 序列化结果数据
                     result_data = result.get('data')
                     if result_data:
                         work_instance.result_data = self._serialize_result_data(result_data)
-                    else:
-                        work_instance.result_data = result_data
 
-                    # 添加成功日志
-                    submit_log_lines.append(
-                        f"{datetime.now().strftime('%Y-%m-%d %H:%M:%S.%f')[:-3]} INFO : 查询SQL执行成功"
-                    )
-
-                    # 添加结果统计
-                    if result.get('data') and isinstance(result['data'], dict):
-                        row_count = result['data'].get('rowCount', 0)
-                        elapsed = result['data'].get('elapsed', 0)
-                        submit_log_lines.append(
-                            f"{datetime.now().strftime('%Y-%m-%d %H:%M:%S.%f')[:-3]} INFO : 返回行数: {row_count}"
-                        )
-                        submit_log_lines.append(
-                            f"{datetime.now().strftime('%Y-%m-%d %H:%M:%S.%f')[:-3]} INFO : 执行时间: {elapsed}秒"
-                        )
-
-                    submit_log_lines.append(
-                        f"{datetime.now().strftime('%Y-%m-%d %H:%M:%S.%f')[:-3]} INFO : 数据保存成功"
-                    )
-                    submit_log_lines.append(
-                        f"{datetime.now().strftime('%Y-%m-%d %H:%M:%S.%f')[:-3]} INFO : 执行成功"
-                    )
-
-                    work_instance.submit_log = "\n".join(submit_log_lines)
-                    work_instance.running_log = "执行成功"
+                # 执行失败
                 else:
                     work_instance.status = JobInstanceStatus.FAIL
                     work_instance.error_message = result.get('error')
 
                     submit_log_lines.append(
-                        f"{datetime.now().strftime('%Y-%m-%d %H:%M:%S.%f')[:-3]} ERROR : 执行失败: {result.get('error')}"
+                        f"{datetime.now().strftime('%Y-%m-%d')}T{datetime.now().strftime('%H:%M:%S.%f')[:-3]} ERROR : 执行失败: {result.get('error')}"
                     )
                     work_instance.submit_log = "\n".join(submit_log_lines)
                     work_instance.running_log = f"执行失败: {result.get('error')}"
@@ -426,7 +656,7 @@ class JobWorkRunService:
                     work_instance.end_datetime = datetime.now()
                     work_instance.error_message = str(e)
 
-                    error_log = f"{datetime.now().strftime('%Y-%m-%d %H:%M:%S.%f')[:-3]} ERROR : 执行异常: {str(e)}"
+                    error_log = f"{datetime.now().strftime('%Y-%m-%d')}T{datetime.now().strftime('%H:%M:%S.%f')[:-3]} ERROR : 执行异常: {str(e)}"
                     work_instance.submit_log = (work_instance.submit_log or "") + "\n" + error_log
                     work_instance.running_log = f"执行异常: {str(e)}"
 
