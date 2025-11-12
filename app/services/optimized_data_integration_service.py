@@ -50,33 +50,57 @@ class OptimizedDataIntegrationService:
             from app.models.data_source import DataSource
             import json
 
+            logger.info("🔄 开始从数据库加载数据源连接配置...")
+
             # 使用同步数据库会话
             db = get_sync_db_session()
             try:
+                # 查询所有激活的数据源
                 saved_sources = db.query(DataSource).filter(DataSource.is_active == True).all()
+                logger.info(f"📊 从数据库查询到 {len(saved_sources)} 个数据源")
+
                 loaded_count = 0
                 for source in saved_sources:
                     try:
+                        logger.info(f"   处理数据源: {source.name} (类型: {source.source_type})")
+
                         if source.connection_config:
+                            # 解析连接配置
                             config = json.loads(source.connection_config) if isinstance(
                                 source.connection_config, str) else source.connection_config
+
+                            logger.info(f"   配置解析成功: {source.name}")
+
+                            # 添加到连接管理器
                             self.connection_manager.add_client(
                                 source.name,
                                 source.source_type,
                                 config
                             )
-                            logger.info(f"加载已保存的数据源: {source.name}")
+                            logger.info(f"   ✅ 连接管理器添加成功: {source.name}")
                             loaded_count += 1
-                    except Exception as e:
-                        logger.error(f"加载数据源 {source.name} 失败: {e}")
+                        else:
+                            logger.warning(f"   ⚠️  数据源 {source.name} 缺少连接配置")
 
-                logger.info(f"成功加载 {loaded_count} 个数据源连接配置")
+                    except Exception as e:
+                        logger.error(f"   ❌ 加载数据源 {source.name} 失败: {e}")
+                        import traceback
+                        logger.error(f"   错误堆栈: {traceback.format_exc()}")
+
+                logger.info(f"✅ 成功加载 {loaded_count}/{len(saved_sources)} 个数据源连接配置")
+
+                # 验证连接管理器中的客户端
+                clients = self.connection_manager.list_clients()
+                logger.info(f"📋 连接管理器中的客户端列表: {clients}")
 
             finally:
                 db.close()
+                logger.info("🔒 数据库会话已关闭")
 
         except Exception as e:
             logger.error(f"❌ 从数据库加载连接配置失败: {e}")
+            import traceback
+            logger.error(f"错误堆栈: {traceback.format_exc()}")
             logger.info("将继续启动，但需要手动配置数据源连接")
 
     @cache_table_schema(ttl=1800)
@@ -1468,6 +1492,26 @@ class OptimizedDataIntegrationService:
         sources = []
         client_names = self.connection_manager.list_clients()
 
+        # ✅ 如果连接管理器为空,直接从数据库读取
+        if not client_names:
+            logger.warning("连接管理器为空,尝试直接从数据库读取数据源")
+            db_sources = await self._get_sources_from_database()
+
+            # ✅ 尝试重新加载连接
+            if db_sources:
+                logger.info(f"从数据库读取到 {len(db_sources)} 个数据源,尝试重新加载到连接管理器")
+                self._load_saved_connections()
+
+                # 重新获取客户端列表
+                client_names = self.connection_manager.list_clients()
+                if not client_names:
+                    logger.error("重新加载连接失败,返回数据库数据")
+                    return db_sources
+                else:
+                    logger.info(f"成功重新加载 {len(client_names)} 个连接")
+            else:
+                return []
+
         for name in client_names:
             try:
                 client = self.connection_manager.get_client(name)
@@ -1592,6 +1636,79 @@ class OptimizedDataIntegrationService:
                 })
 
         return sources
+
+    async def _get_sources_from_database(self) -> List[Dict[str, Any]]:
+        """直接从数据库读取数据源列表(降级方案)"""
+        try:
+            from app.utils.database import get_async_db_context
+            from app.models.data_source import DataSource
+            from sqlalchemy import select
+            import json
+
+            async with get_async_db_context() as db:
+                result = await db.execute(
+                    select(DataSource).where(DataSource.is_active == True)
+                )
+                sources = result.scalars().all()
+
+                sources_list = []
+                for source in sources:
+                    # ✅ 解析连接配置
+                    config = {}
+                    if source.connection_config:
+                        try:
+                            if isinstance(source.connection_config, str):
+                                config = json.loads(source.connection_config)
+                            else:
+                                config = source.connection_config
+                        except:
+                            logger.error(f"解析数据源 {source.name} 的配置失败")
+
+                    # ✅ 构建完整的数据源信息
+                    source_info = {
+                        "id": source.id,
+                        "name": source.name,
+                        "type": source.source_type,
+                        "status": "unknown",  # 无法测试连接
+                        "host": config.get('host', ''),
+                        "port": config.get('port', 0),
+                        "database": config.get('database', ''),
+                        "username": config.get('username', ''),
+                        "password": '******' if config.get('password') else '',
+                        "description": source.description or f"{source.source_type} 数据源",
+                        "last_test": source.last_connection_test or source.updated_at,
+                        "table_count": "未统计"
+                    }
+                    sources_list.append(source_info)
+
+                logger.info(f"✅ 直接从数据库读取到 {len(sources_list)} 个数据源")
+                return sources_list
+
+        except Exception as e:
+            logger.error(f"从数据库读取数据源失败: {e}")
+            import traceback
+            logger.error(f"错误堆栈: {traceback.format_exc()}")
+            return []
+
+    def sync_sources_from_database(self):
+        """手动同步数据库中的数据源到连接管理器"""
+        try:
+            logger.info("🔄 手动同步数据源...")
+            self._load_saved_connections()
+
+            clients = self.connection_manager.list_clients()
+            logger.info(f"✅ 同步完成,连接管理器中有 {len(clients)} 个客户端")
+            return {
+                "success": True,
+                "count": len(clients),
+                "clients": clients
+            }
+        except Exception as e:
+            logger.error(f"同步失败: {e}")
+            return {
+                "success": False,
+                "error": str(e)
+            }
 
     async def _get_source_config_from_db(self, source_name: str) -> Optional[Dict[str, Any]]:
         """从数据库获取数据源的完整配置"""

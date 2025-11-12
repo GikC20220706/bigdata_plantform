@@ -669,3 +669,14 @@ async def get_data_source_health_history(
     except Exception as e:
         logger.error(f"获取健康检测历史失败: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+@router.post("/sync-sources", summary="同步数据源")
+async def sync_sources_from_db():
+    """手动触发从数据库同步数据源到连接管理器"""
+    try:
+        service = get_optimized_data_integration_service()
+        result = service.sync_sources_from_database()
+        return create_response(data=result, message="同步完成")
+    except Exception as e:
+        logger.error(f"同步数据源失败: {e}")
+        raise HTTPException(status_code=500, detail=str(e))

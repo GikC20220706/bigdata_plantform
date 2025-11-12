@@ -107,3 +107,5 @@ PyMySQL>=1.0.2
 cryptography>=3.4.8
 # datax支持
 subprocess-tee==0.4.1
+
+jsonpath-ng==1.7.0

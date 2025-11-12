@@ -8,7 +8,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from loguru import logger
 
-from app.models import JobWorkInstance
+from app.models import JobWorkInstance, JobInstanceStatus
 from app.utils.database import get_async_db
 from app.utils.response import create_response
 from app.schemas.job_workflow import (
@@ -599,4 +599,340 @@ async def rerun_work_instance(
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
         logger.error(f"重跑作业失败: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.delete("/instance/{work_instance_id}", summary="删除作业实例")
+async def delete_work_instance(
+        work_instance_id: str,
+        force: bool = Query(False, description="是否强制删除"),
+        db: AsyncSession = Depends(get_async_db)
+):
+    """
+    删除作业实例
+
+    - 默认只能删除已完成的实例（SUCCESS、FAIL、ABORT）
+    - PENDING（等待中）状态的作业也可以删除
+    - 只有 RUNNING（运行中）状态的作业不能删除
+    - 使用 force=true 可以强制删除任何状态的实例
+    """
+    try:
+        from sqlalchemy import select, delete
+        from app.models import JobWorkInstance
+
+        # 1. 获取作业实例
+        result = await db.execute(
+            select(JobWorkInstance).where(
+                JobWorkInstance.instance_id == work_instance_id
+            )
+        )
+        work_instance = result.scalar_one_or_none()
+
+        if not work_instance:
+            raise HTTPException(status_code=404, detail="作业实例不存在")
+
+        # 2. 检查状态 - 关键修改
+        if not force:
+            # ✅ 只有真正在运行中的作业不能删除
+            # PENDING（等待中）、SUCCESS、FAIL、ABORT 都可以删除
+            if work_instance.status == JobInstanceStatus.RUNNING:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"作业实例正在运行中，无法删除。如需强制删除，请使用force参数。"
+                )
+
+            # ✅ PENDING 状态也可以删除
+            # 因为它还没开始执行，删除是安全的
+
+        # 3. 删除作业实例
+        await db.execute(
+            delete(JobWorkInstance).where(
+                JobWorkInstance.instance_id == work_instance_id
+            )
+        )
+
+        await db.commit()
+
+        logger.info(f"作业实例删除成功: {work_instance_id}")
+
+        return create_response(
+            data={
+                "workInstanceId": work_instance_id,
+                "workName": work_instance.work_name,
+                "status": work_instance.status.value
+            },
+            message="作业实例删除成功"
+        )
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        await db.rollback()
+        logger.error(f"删除作业实例失败: {e}")
+        import traceback
+        logger.error(f"错误堆栈: {traceback.format_exc()}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.get("/instance/{work_instance_id}/jsonpath", summary="获取作业实例JsonPath解析结果")
+async def get_work_instance_jsonpath(
+        work_instance_id: str,
+        db: AsyncSession = Depends(get_async_db)
+):
+    """获取作业实例的JsonPath解析结果"""
+    try:
+        from app.services.job_work_run_service import job_work_run_service
+        from sqlalchemy import select
+        from app.models import JobWorkInstance
+
+        # 获取作业实例
+        result = await db.execute(
+            select(JobWorkInstance).where(JobWorkInstance.instance_id == work_instance_id)
+        )
+        work_instance = result.scalar_one_or_none()
+
+        if not work_instance:
+            raise HTTPException(status_code=404, detail="作业实例不存在")
+
+        # 获取结果数据
+        result_data = work_instance.result_data
+
+        if not result_data:
+            return create_response(data=[], message="暂无结果数据")
+
+        # 解析JsonPath
+        import json
+
+        # 如果result_data是字符串,先解析
+        if isinstance(result_data, str):
+            try:
+                result_data = json.loads(result_data)
+            except:
+                pass
+
+        # 提取所有可能的路径
+        paths = []
+
+        def extract_paths(obj, current_path="$"):
+            """递归提取所有JsonPath路径"""
+            if isinstance(obj, dict):
+                for key, value in obj.items():
+                    new_path = f"{current_path}.{key}"
+
+                    # 格式化值的显示
+                    if isinstance(value, (dict, list)):
+                        display_value = f"[{type(value).__name__}]"
+                    elif isinstance(value, str):
+                        display_value = value[:100] if len(str(value)) > 100 else value
+                    else:
+                        display_value = str(value)
+
+                    paths.append({
+                        "value": display_value,
+                        "jsonPath": new_path,
+                        "copyValue": new_path  # ✅ 添加 copyValue 字段用于复制
+                    })
+
+                    # 递归处理嵌套结构
+                    if isinstance(value, (dict, list)):
+                        extract_paths(value, new_path)
+
+            elif isinstance(obj, list):
+                for i, item in enumerate(obj[:10]):  # 只处理前10个元素
+                    new_path = f"{current_path}[{i}]"
+
+                    # 格式化值的显示
+                    if isinstance(item, (dict, list)):
+                        display_value = f"[{type(item).__name__}]"
+                    elif isinstance(item, str):
+                        display_value = item[:100] if len(str(item)) > 100 else item
+                    else:
+                        display_value = str(item)
+
+                    paths.append({
+                        "value": display_value,
+                        "jsonPath": new_path,
+                        "copyValue": new_path  # ✅ 添加 copyValue 字段用于复制
+                    })
+
+                    # 递归处理嵌套结构
+                    if isinstance(item, (dict, list)):
+                        extract_paths(item, new_path)
+
+        extract_paths(result_data)
+
+        return create_response(
+            data=paths[:100],  # 最多返回100条
+            message="获取成功"
+        )
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"获取JsonPath解析结果失败: {e}")
+        import traceback
+        logger.error(f"错误堆栈: {traceback.format_exc()}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/instance/{work_instance_id}/tablepath", summary="获取表格路径解析")
+async def get_work_instance_tablepath(
+        work_instance_id: str,
+        table_row: int = Body(..., description="表格行号"),
+        table_col: int = Body(..., description="表格列号"),
+        db: AsyncSession = Depends(get_async_db)
+):
+    """获取表格特定位置的数据"""
+    try:
+        from sqlalchemy import select
+        from app.models import JobWorkInstance
+        import json
+
+        # 获取作业实例
+        result = await db.execute(
+            select(JobWorkInstance).where(JobWorkInstance.instance_id == work_instance_id)
+        )
+        work_instance = result.scalar_one_or_none()
+
+        if not work_instance:
+            raise HTTPException(status_code=404, detail="作业实例不存在")
+
+        result_data = work_instance.result_data
+        if not result_data:
+            return create_response(data={"value": "", "copyValue": ""}, message="暂无结果数据")
+
+        # 解析result_data
+        if isinstance(result_data, str):
+            try:
+                result_data = json.loads(result_data)
+            except:
+                pass
+
+        # 尝试从不同的数据结构中提取表格数据
+        table_data = None
+
+        # 情况1: resultData包含columns和rows
+        if isinstance(result_data, dict):
+            if 'columns' in result_data and 'rows' in result_data:
+                columns = result_data['columns']
+                rows = result_data['rows']
+                table_data = rows
+            elif 'data' in result_data:
+                # 情况2: data字段包含数组
+                if isinstance(result_data['data'], list):
+                    table_data = result_data['data']
+        elif isinstance(result_data, list):
+            # 情况3: result_data直接是数组
+            table_data = result_data
+
+        if not table_data or table_row >= len(table_data):
+            return create_response(
+                data={"value": "", "copyValue": ""},
+                message="行号超出范围"
+            )
+
+        row_data = table_data[table_row]
+
+        # 获取列值
+        if isinstance(row_data, dict):
+            keys = list(row_data.keys())
+            if table_col >= len(keys):
+                return create_response(
+                    data={"value": "", "copyValue": ""},
+                    message="列号超出范围"
+                )
+            col_key = keys[table_col]
+            value = row_data[col_key]
+            json_path = f"$.data[{table_row}].{col_key}"
+        elif isinstance(row_data, list):
+            if table_col >= len(row_data):
+                return create_response(
+                    data={"value": "", "copyValue": ""},
+                    message="列号超出范围"
+                )
+            value = row_data[table_col]
+            json_path = f"$.data[{table_row}][{table_col}]"
+        else:
+            return create_response(
+                data={"value": str(row_data), "copyValue": ""},
+                message="不支持的数据格式"
+            )
+
+        return create_response(
+            data={
+                "value": str(value),
+                "copyValue": json_path
+            },
+            message="获取成功"
+        )
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"获取表格路径失败: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/instance/{work_instance_id}/regexpath", summary="获取正则匹配解析")
+async def get_work_instance_regexpath(
+        work_instance_id: str,
+        regex_str: str = Body(..., description="正则表达式"),
+        db: AsyncSession = Depends(get_async_db)
+):
+    """使用正则表达式提取数据"""
+    try:
+        from sqlalchemy import select
+        from app.models import JobWorkInstance
+        import json
+        import re
+
+        # 获取作业实例
+        result = await db.execute(
+            select(JobWorkInstance).where(JobWorkInstance.instance_id == work_instance_id)
+        )
+        work_instance = result.scalar_one_or_none()
+
+        if not work_instance:
+            raise HTTPException(status_code=404, detail="作业实例不存在")
+
+        result_data = work_instance.result_data
+        if not result_data:
+            return create_response(
+                data={"value": "", "copyValue": ""},
+                message="暂无结果数据"
+            )
+
+        # 转换为字符串
+        if isinstance(result_data, dict) or isinstance(result_data, list):
+            text = json.dumps(result_data, ensure_ascii=False)
+        else:
+            text = str(result_data)
+
+        # 执行正则匹配
+        try:
+            matches = re.findall(regex_str, text)
+            if matches:
+                # 如果有多个匹配,返回第一个
+                value = matches[0] if isinstance(matches[0], str) else ', '.join(matches[0])
+                return create_response(
+                    data={
+                        "value": value,
+                        "copyValue": regex_str
+                    },
+                    message=f"匹配成功,找到 {len(matches)} 个结果"
+                )
+            else:
+                return create_response(
+                    data={"value": "无匹配结果", "copyValue": regex_str},
+                    message="未找到匹配项"
+                )
+        except re.error as e:
+            return create_response(
+                data={"value": f"正则表达式错误: {str(e)}", "copyValue": ""},
+                message="正则表达式格式错误"
+            )
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"正则匹配失败: {e}")
         raise HTTPException(status_code=500, detail=str(e))
