@@ -238,14 +238,20 @@ class JDBCExecutorEnhanced(JobExecutor):
 
             async with engine.connect() as conn:
                 result = await conn.execute(text(sql), params)
+
+                # ✅ 获取列名
+                columns = list(result.keys())
+
+                # ✅ 获取数据行
                 rows = [dict(row._mapping) for row in result.fetchall()]
 
             elapsed = (datetime.now() - start_time).total_seconds()
 
             return {
                 "success": True,
-                "message": "查询成功",
+                "message": f"查询成功，返回 {len(rows)} 行数据",
                 "data": {
+                    "columns": columns,  # ✅ 添加列名
                     "rows": rows,
                     "rowCount": len(rows),
                     "elapsed": round(elapsed, 3)
